@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base ── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar (dark) ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+/* ── Grid background texture ── */
+.canvas-grid-dark {
+  background-color: #0f172a;
+  background-image:
+    linear-gradient(rgba(59,130,246,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59,130,246,0.03) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.canvas-grid-light {
+  background-color: #f8fafc;
+  background-image:
+    linear-gradient(rgba(15,23,42,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15,23,42,0.04) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* ── Animations ── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 8px rgba(59,130,246,0.4); }
+  50%      { box-shadow: 0 0 20px rgba(59,130,246,0.7); }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-fadeIn  { animation: fadeIn 0.5s ease-out both; }
+.animate-slideUp { animation: slideUp 0.4s ease-out both; }
+.animate-shimmer {
+  background: linear-gradient(90deg, #1e293b 25%, #334155 50%, #1e293b 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+.animate-shimmer-light {
+  background: linear-gradient(90deg, #e2e8f0 25%, #cbd5e1 50%, #e2e8f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+.animate-pulseGlow { animation: pulseGlow 2s ease-in-out infinite; }
+.animate-spin { animation: spin 1s linear infinite; }
+
+/* ── Utility ── */
+.font-mono-data { font-family: 'DM Mono', monospace; }
+
+/* ── Print styles ── */
+@media print {
+  body {
+    background: #fff !important;
+    color: #0f172a !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+  .recharts-responsive-container { page-break-inside: avoid; }
+  .report-chart-block { page-break-inside: avoid; margin-bottom: 24px; }
+  .page-break-before { page-break-before: always; }
+  
+  /* Print margins and page sizing */
+  @page {
+    size: A4 portrait;
+    margin: 1.6cm 1.2cm;
+  }
+  
+  /* Reset fixed layouts on print */
+  .fixed, .overflow-y-auto {
+    position: static !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
+  
+  /* Ensure backgrounds render */
+  tr, th, td, div, span, ul, li {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
