@@ -105,8 +105,10 @@ function isDivergingField(colName) {
 }
 
 /* ═══════════════════════════════════════════
-   CHART RECOMMENDATION ENGINE (Feature 1)
+   CUSTOM CHART BUILDER — RECOMMENDATION ENGINE
+   (Commented out — uncomment to re-enable)
    ═══════════════════════════════════════════ */
+/* CUSTOM_CHART_BUILDER_START
 
 function getChartRecommendations(xField, yFields, fieldMeta, data, allColumns) {
   if (!xField || yFields.length === 0) return [];
@@ -121,7 +123,6 @@ function getChartRecommendations(xField, yFields, fieldMeta, data, allColumns) {
   const recs = [];
 
   if (xType === 'categorical' && (yType === 'numeric' || yType === 'ratio')) {
-    // Category + Numeric
     if (avgLabelLen > 15) {
       recs.push({ type: 'horizontal', reason: 'Long category labels read better horizontally', rank: 1 });
       recs.push({ type: 'bar', reason: 'Classic vertical bar comparison', rank: 2 });
@@ -142,13 +143,11 @@ function getChartRecommendations(xField, yFields, fieldMeta, data, allColumns) {
     }
     recs.push({ type: 'composed', reason: 'Overlay bars and lines for multi-metric view', rank: 6 });
   } else if (xType === 'date') {
-    // Date + Numeric
     recs.push({ type: 'line', reason: 'Best for tracking changes over time', rank: 1 });
     recs.push({ type: 'area', reason: 'Emphasizes volume and trends over time', rank: 2 });
     recs.push({ type: 'bar', reason: 'Compare period totals as bars', rank: 3 });
     if (isMultiY) recs.push({ type: 'composed', reason: 'Mix bars and lines for multi-metric time series', rank: 3 });
   } else if ((xType === 'numeric' || xType === 'ratio') && (yType === 'numeric' || yType === 'ratio')) {
-    // Numeric + Numeric
     recs.push({ type: 'scatter', reason: 'Reveals correlations between two metrics', rank: 1 });
     if (hasThirdMetric) recs.push({ type: 'bubble', reason: 'Add bubble size for 3D insight', rank: 2 });
     recs.push({ type: 'line', reason: 'Shows trend if X is ordered', rank: 3 });
@@ -157,7 +156,6 @@ function getChartRecommendations(xField, yFields, fieldMeta, data, allColumns) {
     recs.push({ type: 'bar', reason: 'Count-based bar comparison', rank: 2 });
   }
 
-  // Always add remaining chart types as non-recommended
   const recTypes = new Set(recs.map(r => r.type));
   CHART_TYPES.forEach(ct => {
     if (!recTypes.has(ct.value)) {
@@ -168,9 +166,13 @@ function getChartRecommendations(xField, yFields, fieldMeta, data, allColumns) {
   return recs.sort((a, b) => a.rank - b.rank);
 }
 
+CUSTOM_CHART_BUILDER_END */
+
 /* ═══════════════════════════════════════════
-   PRESET TEMPLATES (Feature 4)
+   CUSTOM CHART BUILDER — PRESET TEMPLATES
+   (Commented out — uncomment to re-enable)
    ═══════════════════════════════════════════ */
+/* CUSTOM_CHART_BUILDER_START
 
 const PRESET_TEMPLATES = [
   {
@@ -234,6 +236,8 @@ const PRESET_TEMPLATES = [
     aggregation: 'sum',
   },
 ];
+
+CUSTOM_CHART_BUILDER_END */
 
 /* ═══════════════════════════════════════════
    HELPERS
@@ -373,7 +377,24 @@ function generateSampleCSV() {
   return Papa.unparse(rows);
 }
 
-/* ── Aggregation helper (Feature 3) ── */
+function safeParseDate(val) {
+  if (!val) return 0;
+  if (val instanceof Date) return val.getTime();
+  const parsed = Date.parse(String(val).trim());
+  if (!isNaN(parsed)) return parsed;
+  const parts = String(val).match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+  if (parts) {
+    const d = parseInt(parts[1], 10);
+    const m = parseInt(parts[2], 10) - 1;
+    let y = parseInt(parts[3], 10);
+    if (y < 100) y += 2000;
+    return new Date(y, m, d).getTime();
+  }
+  return 0;
+}
+
+/* CUSTOM_CHART_BUILDER_START
+
 function aggregateData(data, xAxis, yAxis, mode) {
   if (mode === 'sum' || mode === 'avg' || mode === 'count') {
     const groups = {};
@@ -403,41 +424,134 @@ function aggregateData(data, xAxis, yAxis, mode) {
 }
 
 function processChartData(data, config, fieldMeta) {
-  const { xAxis, yAxis, chartType, filterZeros, topN, aggregation, bubbleField } = config;
+  const { xAxis, yAxis, chartType, filterZeros, topN, aggregation, bubbleField, startDate, endDate, orgName } = config;
   if (!data || !xAxis || yAxis.length === 0) return [];
 
-  // Step 1: Aggregate data
-  let d = aggregateData(data, xAxis, yAxis, aggregation || 'sum');
+  const orgCol = getOrgNameColumn(data[0]);
+  const dateCol = getAsOfDateColumn(data[0]);
 
+  let filtered = data;
+  if (orgCol && orgName && Array.isArray(orgName) && orgName.length > 0) {
+    const orgsSet = new Set(orgName.map(o => String(o).trim()));
+    filtered = filtered.filter(row => orgsSet.has(String(row[orgCol]).trim()));
+  } else if (orgCol && orgName && typeof orgName === 'string' && orgName.trim() !== '') {
+    filtered = filtered.filter(row => String(row[orgCol]).trim() === orgName.trim());
+  }
+
+  if (dateCol && startDate) {
+    const startTs = safeParseDate(startDate);
+    filtered = filtered.filter(row => safeParseDate(row[dateCol]) >= startTs);
+  }
+  if (dateCol && endDate) {
+    const endTs = safeParseDate(endDate);
+    filtered = filtered.filter(row => safeParseDate(row[dateCol]) <= endTs);
+  }
+
+  const isMultiOrg = orgCol && orgName && Array.isArray(orgName) && orgName.length > 1;
+
+  let d;
   const xType = fieldMeta[xAxis] || 'categorical';
   const isNumericX = xType === 'numeric' || xType === 'ratio';
 
-  // Step 2: Build chart points
-  d = d.map(row => {
-    const point = { 
-      [xAxis]: isNumericX ? (row[xAxis] != null ? Number(row[xAxis]) : null) : row[xAxis], 
-      __orgName: row['Org Name'] || row['org_name'] || row[xAxis] || '' 
-    };
-    yAxis.forEach(col => { point[col] = row[col] != null ? Number(row[col]) : null; });
-    if (bubbleField) point[bubbleField] = row[bubbleField] != null ? Number(row[bubbleField]) : 1;
-    return point;
-  });
+  if (isMultiOrg) {
+    const groups = {};
+    for (const row of filtered) {
+      const xVal = String(row[xAxis]);
+      const orgVal = String(row[orgCol] || '').trim() || 'Unknown';
+      if (!groups[xVal]) {
+        groups[xVal] = {
+          [xAxis]: isNumericX ? (row[xAxis] != null ? Number(row[xAxis]) : null) : row[xAxis],
+          orgs: {}
+        };
+      }
+      if (!groups[xVal].orgs[orgVal]) {
+        groups[xVal].orgs[orgVal] = { __count: 0 };
+        yAxis.forEach(col => {
+          groups[xVal].orgs[orgVal][col] = 0;
+        });
+      }
+      groups[xVal].orgs[orgVal].__count++;
+      yAxis.forEach(col => {
+        groups[xVal].orgs[orgVal][col] += Number(row[col]) || 0;
+      });
+      if (bubbleField) {
+        if (groups[xVal].orgs[orgVal][bubbleField] === undefined) {
+          groups[xVal].orgs[orgVal][bubbleField] = 0;
+        }
+        groups[xVal].orgs[orgVal][bubbleField] += Number(row[bubbleField]) || 0;
+      }
+    }
 
-  // Step 3: Filter null/empty X values
-  d = d.filter(row => row[xAxis] != null && row[xAxis] !== '');
+    const aggMode = aggregation || 'sum';
+    d = Object.values(groups).map(group => {
+      const point = {
+        [xAxis]: group[xAxis]
+      };
+      for (const orgVal of Object.keys(group.orgs)) {
+        const orgData = group.orgs[orgVal];
+        yAxis.forEach(col => {
+          let val = 0;
+          if (aggMode === 'avg') {
+            val = orgData.__count > 0 ? orgData[col] / orgData.__count : 0;
+          } else if (aggMode === 'count') {
+            val = orgData.__count;
+          } else {
+            val = orgData[col];
+          }
+          point[`${orgVal} - ${col}`] = val;
+        });
 
-  // Step 4: Filter zeros
-  if (filterZeros) {
-    d = d.filter(row => yAxis.some(col => row[col] != null && row[col] !== 0));
+        if (bubbleField && orgData[bubbleField] !== undefined) {
+          let bVal = orgData[bubbleField];
+          if (aggMode === 'avg') {
+            bVal = orgData.__count > 0 ? bVal / orgData.__count : 0;
+          } else if (aggMode === 'count') {
+            bVal = orgData.__count;
+          }
+          point[`${orgVal} - ${bubbleField}`] = bVal;
+        }
+      }
+      return point;
+    });
+  } else {
+    let aggregated = aggregateData(filtered, xAxis, yAxis, aggregation || 'sum');
+    d = aggregated.map(row => {
+      const point = { 
+        [xAxis]: isNumericX ? (row[xAxis] != null ? Number(row[xAxis]) : null) : row[xAxis], 
+        __orgName: row['Org Name'] || row['org_name'] || row[xAxis] || '' 
+      };
+      yAxis.forEach(col => { point[col] = row[col] != null ? Number(row[col]) : null; });
+      if (bubbleField) point[bubbleField] = row[bubbleField] != null ? Number(row[bubbleField]) : 1;
+      return point;
+    });
   }
 
-  // Step 5: Limit / Sort data
+  d = d.filter(row => row[xAxis] != null && row[xAxis] !== '');
+
+  if (filterZeros) {
+    if (isMultiOrg) {
+      const pivotedKeys = [];
+      orgName.forEach(org => {
+        yAxis.forEach(col => {
+          pivotedKeys.push(`${org} - ${col}`);
+        });
+      });
+      d = d.filter(row => pivotedKeys.some(key => row[key] != null && row[key] !== 0));
+    } else {
+      d = d.filter(row => yAxis.some(col => row[col] != null && row[col] !== 0));
+    }
+  }
+
   if (topN && topN !== 'all' && !PIE_TYPES.includes(chartType)) {
     const n = parseInt(topN, 10);
     if (xType === 'categorical') {
       d = [...d].sort((a, b) => {
-        const aVal = yAxis.reduce((sum, col) => sum + Math.abs(Number(a[col]) || 0), 0);
-        const bVal = yAxis.reduce((sum, col) => sum + Math.abs(Number(b[col]) || 0), 0);
+        const aVal = isMultiOrg 
+          ? orgName.reduce((sum, org) => sum + yAxis.reduce((colSum, col) => colSum + Math.abs(Number(a[`${org} - ${col}`]) || 0), 0), 0)
+          : yAxis.reduce((sum, col) => sum + Math.abs(Number(a[col]) || 0), 0);
+        const bVal = isMultiOrg
+          ? orgName.reduce((sum, org) => sum + yAxis.reduce((colSum, col) => colSum + Math.abs(Number(b[`${org} - ${col}`]) || 0), 0), 0)
+          : yAxis.reduce((sum, col) => sum + Math.abs(Number(b[col]) || 0), 0);
         return bVal - aVal;
       }).slice(0, n);
     } else {
@@ -471,6 +585,8 @@ function processChartData(data, config, fieldMeta) {
 
   return d;
 }
+
+CUSTOM_CHART_BUILDER_END */
 
 // Dynamic Column Mapping Helpers
 function getMetricColumn(row, colLetter) {
@@ -604,7 +720,21 @@ const SearchableDropdown = ({ options, value, onChange, placeholder, dark, multi
         <span className={`truncate ${!displayVal ? 'opacity-50' : ''}`}>
           {displayVal || placeholder}
         </span>
-        <svg className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''} ${dark ? 'text-slate-400' : 'text-slate-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {displayVal && (
+            <span
+              onClick={(e) => {
+                e.stopPropagation();
+                onChange(multiple ? [] : '');
+              }}
+              className={`p-1 rounded hover:bg-slate-700/50 hover:text-white transition-colors text-[10px] leading-none cursor-pointer ${dark ? 'text-slate-400' : 'text-slate-500'}`}
+              title="Clear selection"
+            >
+              ✕
+            </span>
+          )}
+          <svg className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''} ${dark ? 'text-slate-400' : 'text-slate-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+        </div>
       </button>
       {open && (
         <div className={`absolute z-50 mt-1 w-full rounded-lg border shadow-2xl max-h-56 overflow-hidden ${dark ? 'bg-slate-800 border-slate-600' : 'bg-white border-slate-200'}`}>
@@ -646,27 +776,44 @@ const SearchableDropdown = ({ options, value, onChange, placeholder, dark, multi
 };
 
 /* ═══════════════════════════════════════════
-   CHART RENDERER (Feature 3 — Enhanced)
+   CUSTOM CHART BUILDER — CHART RENDERER COMPONENT
+   (Commented out — uncomment to re-enable)
    ═══════════════════════════════════════════ */
+/* CUSTOM_CHART_BUILDER_START
 
 const ChartRenderer = ({ config, data, fieldMeta = {}, height = 480, dark, animate = true, onBrushChange }) => {
-  const { chartType, xAxis, yAxis, palette, showTrendline, legendLabels, logScale, bubbleField, brushStartIndex, brushEndIndex } = config;
+  const { chartType, xAxis, yAxis, palette, showTrendline, legendLabels, logScale, bubbleField, brushStartIndex, brushEndIndex, orgName } = config;
   const colors = COLOR_PALETTES[palette] || COLOR_PALETTES.Ocean;
   const gridStroke = dark ? 'rgba(30,41,59,0.6)' : 'rgba(226,232,240,0.7)';
   const axisStroke = dark ? '#334155' : '#cbd5e1';
   const textFill = dark ? '#94a3b8' : '#64748b';
 
+  const isMultiOrg = orgName && Array.isArray(orgName) && orgName.length > 1;
+
+  const targetYAxis = useMemo(() => {
+    if (isMultiOrg) {
+      const pivoted = [];
+      orgName.forEach(org => {
+        yAxis.forEach(col => {
+          pivoted.push(`${org} - ${col}`);
+        });
+      });
+      return pivoted;
+    }
+    return yAxis;
+  }, [isMultiOrg, orgName, yAxis]);
+
   // Check if Y fields have diverging (positive/negative) data
-  const hasDiverging = yAxis.some(isDivergingField);
+  const hasDiverging = targetYAxis.some(isDivergingField);
 
   // Process data using our helper
   const chartData = useMemo(() => {
     let d = processChartData(data, config, fieldMeta);
     if (showTrendline && !PIE_TYPES.includes(chartType)) {
-      d = addTrendData(d, yAxis);
+      d = addTrendData(d, targetYAxis);
     }
     return d;
-  }, [data, config, fieldMeta, showTrendline, chartType, yAxis]);
+  }, [data, config, fieldMeta, showTrendline, chartType, targetYAxis]);
 
   const xType = fieldMeta[xAxis] || 'categorical';
   const isNumericX = xType === 'numeric' || xType === 'ratio';
@@ -762,7 +909,7 @@ const ChartRenderer = ({ config, data, fieldMeta = {}, height = 480, dark, anima
   if (PIE_TYPES.includes(chartType)) {
     const pieData = chartData.map(row => ({
       name: String(row[xAxis]),
-      value: Math.abs(Number(row[yAxis[0]]) || 0),
+      value: Math.abs(Number(row[targetYAxis[0]]) || 0),
     })).filter(d => d.value > 0);
     const total = pieData.reduce((s, d) => s + d.value, 0);
     const innerR = chartType === 'donut' ? 75 : 0;
@@ -789,10 +936,10 @@ const ChartRenderer = ({ config, data, fieldMeta = {}, height = 480, dark, anima
         <ScatterChart margin={chartMargin}>
           <CartesianGrid {...gridProps} />
           <XAxis {...xAxisProps} name={xAxis} />
-          <YAxis {...yAxisProps} name={yAxis[0]} />
+          <YAxis {...yAxisProps} name={targetYAxis[0]} />
           <Tooltip content={<CustomTooltip dark={dark} />} />
           <Legend {...legendProps} />
-          <Scatter name={`${xAxis} vs ${yAxis[0]}`} data={chartData} fill={colors[0]} isAnimationActive={animate}>
+          <Scatter name={`${xAxis} vs ${targetYAxis[0]}`} data={chartData} fill={colors[0]} isAnimationActive={animate}>
             {chartData.map((_, j) => <Cell key={j} fill={colors[0]} />)}
           </Scatter>
         </ScatterChart>
@@ -802,17 +949,17 @@ const ChartRenderer = ({ config, data, fieldMeta = {}, height = 480, dark, anima
 
   // ── BUBBLE ──
   if (chartType === 'bubble') {
-    const sizeField = bubbleField || yAxis[1] || yAxis[0];
+    const sizeField = bubbleField || targetYAxis[1] || targetYAxis[0];
     return (
       <ResponsiveContainer width="100%" height={height}>
         <ScatterChart margin={chartMargin}>
           <CartesianGrid {...gridProps} />
           <XAxis {...xAxisProps} name={xAxis} />
-          <YAxis {...yAxisProps} dataKey={yAxis[0]} name={yAxis[0]} />
+          <YAxis {...yAxisProps} dataKey={targetYAxis[0]} name={targetYAxis[0]} />
           <ZAxis dataKey={sizeField} range={[40, 600]} name={sizeField} />
           <Tooltip content={<CustomTooltip dark={dark} />} />
           <Legend {...legendProps} />
-          <Scatter name={`${yAxis[0]} (size: ${sizeField})`} data={chartData} fill={colors[0]} isAnimationActive={animate}>
+          <Scatter name={`${targetYAxis[0]} (size: ${sizeField})`} data={chartData} fill={colors[0]} isAnimationActive={animate}>
             {chartData.map((_, j) => <Cell key={j} fill={colors[j % colors.length]} opacity={0.7} />)}
           </Scatter>
         </ScatterChart>
@@ -832,7 +979,7 @@ const ChartRenderer = ({ config, data, fieldMeta = {}, height = 480, dark, anima
           <YAxis type="category" dataKey={xAxis} tick={{ fill: textFill, fontSize: 11, fontFamily: "'DM Mono', monospace" }} stroke={axisStroke} width={95} tickMargin={4} interval={0} />
           <Tooltip content={<CustomTooltip dark={dark} />} cursor={{ fill: dark ? 'rgba(59,130,246,0.06)' : 'rgba(59,130,246,0.04)' }} />
           <Legend {...legendProps} />
-          {yAxis.map((col, i) => (
+          {targetYAxis.map((col, i) => (
             hasDiverging && isDivergingField(col)
               ? <Bar key={col} dataKey={col} name={getLabel(col)} barSize={barH} minPointSize={3}
                   isAnimationActive={animate} animationDuration={800} radius={[0,6,6,0]}>
@@ -856,12 +1003,12 @@ const ChartRenderer = ({ config, data, fieldMeta = {}, height = 480, dark, anima
           <YAxis {...yAxisProps} />
           <Tooltip content={<CustomTooltip dark={dark} />} />
           <Legend {...legendProps} />
-          {yAxis.map((col, i) =>
+          {targetYAxis.map((col, i) =>
             i === 0
               ? <Bar key={col} dataKey={col} name={getLabel(col)} fill={colors[i % colors.length]} radius={[6,6,0,0]} barSize={32} isAnimationActive={animate} animationDuration={800} />
               : <Line key={col} dataKey={col} name={getLabel(col)} stroke={colors[i % colors.length]} strokeWidth={2.5} dot={{ r: 3, fill: colors[i % colors.length] }} isAnimationActive={animate} animationDuration={800} />
           )}
-          {showTrendline && yAxis.map((col, i) => (
+          {showTrendline && targetYAxis.map((col, i) => (
             <Line key={`trend_${col}`} dataKey={`__trend_${col}`} name={`Trend (${getLabel(col)})`}
               stroke={colors[i % colors.length]} strokeWidth={1.5} strokeDasharray="6 3" dot={false} isAnimationActive={animate} />
           ))}
@@ -877,8 +1024,8 @@ const ChartRenderer = ({ config, data, fieldMeta = {}, height = 480, dark, anima
       <ResponsiveContainer width="100%" height={height}>
         <AreaChart data={chartData} margin={chartMargin}>
           <defs>
-            {yAxis.map((col, i) => (
-              <linearGradient key={col} id={`grad_${col}`} x1="0" y1="0" x2="0" y2="1">
+            {targetYAxis.map((col, i) => (
+              <linearGradient key={col} id={`grad_${i}`} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor={colors[i % colors.length]} stopOpacity={0.4} />
                 <stop offset="95%" stopColor={colors[i % colors.length]} stopOpacity={0.02} />
               </linearGradient>
@@ -889,13 +1036,13 @@ const ChartRenderer = ({ config, data, fieldMeta = {}, height = 480, dark, anima
           <YAxis {...yAxisProps} />
           <Tooltip content={<CustomTooltip dark={dark} />} />
           <Legend {...legendProps} />
-          {yAxis.map((col, i) => (
+          {targetYAxis.map((col, i) => (
             <Area key={col} type="monotone" dataKey={col} name={getLabel(col)}
-              stroke={colors[i % colors.length]} fill={`url(#grad_${col})`} strokeWidth={2.5}
+              stroke={colors[i % colors.length]} fill={`url(#grad_${i})`} strokeWidth={2.5}
               dot={{ r: 2, fill: colors[i % colors.length], strokeWidth: 0 }}
               isAnimationActive={animate} animationDuration={800} />
           ))}
-          {showTrendline && yAxis.map((col, i) => (
+          {showTrendline && targetYAxis.map((col, i) => (
             <Line key={`trend_${col}`} dataKey={`__trend_${col}`} name={`Trend (${getLabel(col)})`}
               stroke={colors[i % colors.length]} strokeWidth={1.5} strokeDasharray="6 3" dot={false} isAnimationActive={animate} />
           ))}
@@ -915,14 +1062,14 @@ const ChartRenderer = ({ config, data, fieldMeta = {}, height = 480, dark, anima
           <YAxis {...yAxisProps} />
           <Tooltip content={<CustomTooltip dark={dark} />} />
           <Legend {...legendProps} />
-          {yAxis.map((col, i) => (
+          {targetYAxis.map((col, i) => (
             <Line key={col} type="monotone" dataKey={col} name={getLabel(col)}
               stroke={colors[i % colors.length]} strokeWidth={2.5}
               dot={{ r: 3, fill: colors[i % colors.length], strokeWidth: 0 }}
               activeDot={{ r: 5, strokeWidth: 2, stroke: dark ? '#0f172a' : '#fff' }}
               isAnimationActive={animate} animationDuration={800} />
           ))}
-          {showTrendline && yAxis.map((col, i) => (
+          {showTrendline && targetYAxis.map((col, i) => (
             <Line key={`trend_${col}`} dataKey={`__trend_${col}`} name={`Trend (${getLabel(col)})`}
               stroke={colors[i % colors.length]} strokeWidth={1.5} strokeDasharray="6 3" dot={false} isAnimationActive={animate} />
           ))}
@@ -944,7 +1091,7 @@ const ChartRenderer = ({ config, data, fieldMeta = {}, height = 480, dark, anima
         <YAxis {...yAxisProps} />
         <Tooltip content={<CustomTooltip dark={dark} />} cursor={{ fill: dark ? 'rgba(59,130,246,0.06)' : 'rgba(59,130,246,0.04)' }} />
         <Legend {...legendProps} />
-        {yAxis.map((col, i) => (
+        {targetYAxis.map((col, i) => (
           hasDiverging && isDivergingField(col)
             ? <Bar key={col} dataKey={col} name={getLabel(col)} stackId={stackId} radius={stackId ? 0 : [6,6,0,0]}
                 barSize={barSize} minPointSize={3} isAnimationActive={animate} animationDuration={800}>
@@ -954,7 +1101,7 @@ const ChartRenderer = ({ config, data, fieldMeta = {}, height = 480, dark, anima
                 stackId={stackId} radius={stackId ? 0 : [6,6,0,0]} barSize={barSize} minPointSize={3}
                 isAnimationActive={animate} animationDuration={800} />
         ))}
-        {showTrendline && yAxis.map((col, i) => (
+        {showTrendline && targetYAxis.map((col, i) => (
           <ReferenceLine key={`ref_${col}`} y={computeStats(chartData.map(r => r[col])).avg}
             stroke={colors[i % colors.length]} strokeDasharray="6 3" strokeWidth={1.5}
             label={{ value: `Avg: ${formatAxisTick(computeStats(chartData.map(r => r[col])).avg)}`, fill: colors[i % colors.length], fontSize: 10, position: 'right' }} />
@@ -967,14 +1114,25 @@ const ChartRenderer = ({ config, data, fieldMeta = {}, height = 480, dark, anima
 
 
 
+CUSTOM_CHART_BUILDER_END */
+
 /* ═══════════════════════════════════════════
-   STATS RIBBON
+   CUSTOM CHART BUILDER — STATS RIBBON COMPONENT
+   (Commented out — uncomment to re-enable)
    ═══════════════════════════════════════════ */
+/* CUSTOM_CHART_BUILDER_START
 
 const StatsRibbon = ({ yColumns, data, dark, palette }) => {
   const colors = COLOR_PALETTES[palette] || COLOR_PALETTES.Ocean;
+  const gridColsClass = yColumns.length === 1 
+    ? 'grid-cols-1' 
+    : yColumns.length === 2 
+      ? 'grid-cols-1 sm:grid-cols-2' 
+      : yColumns.length === 3 
+        ? 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3' 
+        : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4';
   return (
-    <div className="grid gap-3 mb-5 animate-fadeIn" style={{ gridTemplateColumns: `repeat(${Math.min(yColumns.length, 4)}, 1fr)` }}>
+    <div className={`grid gap-3 mb-5 animate-fadeIn ${gridColsClass}`}>
       {yColumns.slice(0, 4).map((col, i) => {
         const stats = computeStats(data.map(r => r[col]));
         const color = colors[i % colors.length];
@@ -1009,8 +1167,10 @@ const StatsRibbon = ({ yColumns, data, dark, palette }) => {
   );
 };
 
+CUSTOM_CHART_BUILDER_END */
+
 /* ═══════════════════════════════════════════
-   TOAST / ICONS / REPORT MODAL
+   TOAST / ICONS
    ═══════════════════════════════════════════ */
 
 const Toast = ({ message, type, onClose }) => {
@@ -1052,17 +1212,50 @@ const MoonIcon = () => (
   </svg>
 );
 
+/* ═══════════════════════════════════════════
+   CUSTOM CHART BUILDER — REPORT MODAL COMPONENT
+   (Commented out — uncomment to re-enable)
+   ═══════════════════════════════════════════ */
+/* CUSTOM_CHART_BUILDER_START
+
 const ReportModal = ({ charts, data, fieldMeta = {}, onClose, dark }) => {
+  const [reportTitle, setReportTitle] = React.useState('insightforge_custom_report');
   const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto print:static print:overflow-visible">
       <div className={`min-h-screen ${dark ? 'bg-slate-900' : 'bg-white'} print:bg-white`}>
-        <div className="no-print sticky top-0 z-10 flex items-center justify-between px-8 py-4 border-b backdrop-blur-sm"
+        <div className="no-print sticky top-0 z-10 flex flex-col md:flex-row md:items-center justify-between gap-4 px-4 sm:px-8 py-3 sm:py-4 border-b backdrop-blur-sm"
           style={{ backgroundColor: dark ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.95)', borderColor: dark ? '#1e293b' : '#e2e8f0' }}>
-          <h2 className={`text-lg font-bold ${dark ? 'text-white' : 'text-slate-800'}`}>Report Preview</h2>
-          <div className="flex gap-3">
-            <button onClick={() => window.print()} className="px-5 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-500 transition-colors">🖨️ Print / Save as PDF</button>
-            <button onClick={onClose} className={`px-5 py-2 rounded-lg text-sm font-semibold border transition-colors ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-800' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`}>✕ Close</button>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 flex-1 w-full">
+            <h2 className={`text-sm sm:text-base font-bold ${dark ? 'text-white' : 'text-slate-800'}`}>Report Preview</h2>
+            <div className="flex-1 w-full max-w-full sm:max-w-xs md:max-w-sm">
+              <input 
+                type="text" 
+                value={reportTitle} 
+                onChange={(e) => setReportTitle(e.target.value.replace(/[^a-zA-Z0-9_-]/g, '_'))}
+                placeholder="Report Filename"
+                className={`w-full px-3 py-1.5 rounded-lg border text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 ${
+                  dark 
+                    ? 'bg-slate-800 border-slate-700 text-white placeholder-slate-500' 
+                    : 'bg-white border-slate-300 text-slate-800 placeholder-slate-400'
+                }`}
+                title="Edit report filename for PDF export"
+              />
+            </div>
+          </div>
+          <div className="flex flex-wrap sm:flex-nowrap gap-2 sm:gap-3 w-full sm:w-auto justify-end">
+            <button 
+              onClick={() => {
+                const originalTitle = document.title;
+                document.title = reportTitle;
+                window.print();
+                document.title = originalTitle;
+              }} 
+              className="flex-1 sm:flex-initial px-3 sm:px-5 py-2 rounded-lg bg-blue-600 text-white text-xs sm:text-sm font-semibold hover:bg-blue-500 transition-colors whitespace-nowrap"
+            >
+              🖨️ Print / Save as PDF
+            </button>
+            <button onClick={onClose} className={`flex-1 sm:flex-initial px-3 sm:px-5 py-2 rounded-lg text-xs sm:text-sm font-semibold border transition-colors ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-800' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`}>✕ Close</button>
           </div>
         </div>
         <div className="max-w-4xl mx-auto px-8 py-12 print:px-4 print:py-6">
@@ -1105,8 +1298,15 @@ const ReportModal = ({ charts, data, fieldMeta = {}, onClose, dark }) => {
                     <tbody>
                       {chart.config.yAxis.map(col => {
                         const stats = computeStats(visibleChartData.map(r => r[col]));
-                        return (
-                          <tr key={col} className={`border-t ${dark ? 'border-slate-700' : 'border-slate-200'} print:border-slate-200`}>
+                        return (CUSTOM_CHART_BUILDER_END */
+
+/* ═══════════════════════════════════════════
+   CUSTOM CHART BUILDER — WEEKLY INSIGHTS
+   (Commented out — uncomment to re-enable)
+   ═══════════════════════════════════════════ */
+/* CUSTOM_CHART_BUILDER_START
+
+<tr key={col} className={`border-t ${dark ? 'border-slate-700' : 'border-slate-200'} print:border-slate-200`}>
                             <td className="px-4 py-2.5 font-medium print:text-slate-700">{col}</td>
                             <td className="px-4 py-2.5 text-right font-mono-data print:text-slate-700">{stats.min.toLocaleString()}</td>
                             <td className="px-4 py-2.5 text-right font-mono-data print:text-slate-700">{stats.max.toLocaleString()}</td>
@@ -1142,46 +1342,104 @@ const ReportModal = ({ charts, data, fieldMeta = {}, onClose, dark }) => {
 function generateWeeklyInsights(weeklyReportData, selectedWeeklyMetrics) {
   if (!weeklyReportData) return [];
   const insights = [];
-  const { orgRows, selectedIdx } = weeklyReportData;
-  
-  selectedWeeklyMetrics.forEach(colName => {
-    const currentVal = Number(orgRows[selectedIdx][colName]) || 0;
-    const prevVal = selectedIdx > 0 
-      ? (Number(orgRows[selectedIdx - 1][colName]) || 0) 
-      : null;
-    const changePct = (prevVal !== null && prevVal > 0)
-      ? ((currentVal - prevVal) / prevVal) * 100
-      : null;
-      
-    let text = `${colName} is currently at ${currentVal.toLocaleString()}`;
-    if (changePct !== null) {
-      text += `, which represents a ${Math.abs(changePct).toFixed(1)}% ${changePct >= 0 ? 'increase' : 'decrease'} compared to the previous week.`;
-    } else {
-      text += `. This represents the baseline value for the selected period.`;
-    }
+
+  if (weeklyReportData.isComparison) {
+    const { selectedOrgs, orgWindowSummaries, prevDate } = weeklyReportData;
     
-    const lowerCol = colName.toLowerCase();
-    if (lowerCol.includes('returning') && lowerCol.includes('mau')) {
-      const mauCol = selectedWeeklyMetrics.find(c => c.toLowerCase().includes('current mau') || (c.toLowerCase().includes('mau') && !c.toLowerCase().includes('returning')));
-      if (mauCol) {
-        const mauVal = Number(orgRows[selectedIdx][mauCol]) || 0;
-        if (mauVal > 0) {
-          const ratio = (currentVal / mauVal) * 100;
-          text += ` Returning users make up ${ratio.toFixed(1)}% of active users, showing a ${ratio > 50 ? 'healthy' : 'moderate'} retention trend.`;
+    selectedOrgs.forEach(org => {
+      const summary = orgWindowSummaries.find(s => s.org === org);
+      if (!summary) return;
+      
+      const { windowRows, latestRow } = summary;
+      
+      selectedWeeklyMetrics.forEach(colName => {
+        const currentVal = Number(latestRow[colName]) || 0;
+        
+        // Find previous value in windowRows (if prevDate exists)
+        const prevRow = prevDate && windowRows.length > 1
+          ? windowRows[windowRows.length - 2]
+          : null;
+        const prevVal = prevRow ? (Number(prevRow[colName]) || 0) : null;
+        
+        const changePct = (prevVal !== null && prevVal > 0)
+          ? ((currentVal - prevVal) / prevVal) * 100
+          : null;
+
+        let text = `${org} - ${colName} is currently at ${currentVal.toLocaleString()}`;
+        if (changePct !== null) {
+          text += `, which represents a ${Math.abs(changePct).toFixed(1)}% ${changePct >= 0 ? 'increase' : 'decrease'} compared to the previous week.`;
+        } else {
+          text += `. This represents the baseline value for the selected period.`;
+        }
+
+        const lowerCol = colName.toLowerCase();
+        if (lowerCol.includes('returning') && lowerCol.includes('mau')) {
+          const mauCol = selectedWeeklyMetrics.find(c => c.toLowerCase().includes('current mau') || (c.toLowerCase().includes('mau') && !c.toLowerCase().includes('returning')));
+          if (mauCol) {
+            const mauVal = Number(latestRow[mauCol]) || 0;
+            if (mauVal > 0) {
+              const ratio = (currentVal / mauVal) * 100;
+              text += ` Returning users make up ${ratio.toFixed(1)}% of active users.`;
+            }
+          }
+        }
+        insights.push(text);
+      });
+    });
+  } else {
+    const { orgRows, selectedIdx } = weeklyReportData;
+    
+    selectedWeeklyMetrics.forEach(colName => {
+      const currentVal = Number(orgRows[selectedIdx][colName]) || 0;
+      const prevVal = selectedIdx > 0 
+        ? (Number(orgRows[selectedIdx - 1][colName]) || 0) 
+        : null;
+      const changePct = (prevVal !== null && prevVal > 0)
+        ? ((currentVal - prevVal) / prevVal) * 100
+        : null;
+        
+      let text = `${colName} is currently at ${currentVal.toLocaleString()}`;
+      if (changePct !== null) {
+        text += `, which represents a ${Math.abs(changePct).toFixed(1)}% ${changePct >= 0 ? 'increase' : 'decrease'} compared to the previous week.`;
+      } else {
+        text += `. This represents the baseline value for the selected period.`;
+      }
+      
+      const lowerCol = colName.toLowerCase();
+      if (lowerCol.includes('returning') && lowerCol.includes('mau')) {
+        const mauCol = selectedWeeklyMetrics.find(c => c.toLowerCase().includes('current mau') || (c.toLowerCase().includes('mau') && !c.toLowerCase().includes('returning')));
+        if (mauCol) {
+          const mauVal = Number(orgRows[selectedIdx][mauCol]) || 0;
+          if (mauVal > 0) {
+            const ratio = (currentVal / mauVal) * 100;
+            text += ` Returning users make up ${ratio.toFixed(1)}% of active users, showing a ${ratio > 50 ? 'healthy' : 'moderate'} retention trend.`;
+          }
         }
       }
-    }
-    insights.push(text);
-  });
+      insights.push(text);
+    });
+  }
 
   return insights;
 }
 
 /* ── Weekly Report Modal ── */
 /* ── Weekly Report Modal ── */
-const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeeklyMetrics, weeklyChartType, onClose, dark }) => {
+const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeeklyMetrics, weeklyChartType, onClose, dark, data }) => {
+  const displayOrgName = Array.isArray(orgName) ? orgName.join(', ') : orgName;
+  const safeOrgName = (Array.isArray(orgName) ? orgName.join('_') : orgName)
+    .replace(/[^a-zA-Z0-9]/g, '_').replace(/__+/g, '_').replace(/^_+|_+$/g, '');
+  const baseFilename = `${safeOrgName}_weekly_report`;
+
+  const [reportFilename, setReportFilename] = React.useState(baseFilename);
   const [exportOpen, setExportOpen] = React.useState(false);
   const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+  // Sync state if org selection changes
+  React.useEffect(() => {
+    setReportFilename(baseFilename);
+  }, [baseFilename]);
+
   const firstRow = weeklyReportData?.historyRows?.[0] || {};
   const regionKey = Object.keys(firstRow).find(k => k.toLowerCase().includes('region')) || 'Focus Region';
   const cohortKey = Object.keys(firstRow).find(k => k.toLowerCase().includes('cohort')) || 'India Cohort';
@@ -1209,98 +1467,195 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
     };
   });
 
-  const insights = generateWeeklyInsights(weeklyReportData, selectedWeeklyMetrics);
+  const chartSeries = [];
+  if (weeklyReportData?.isComparison) {
+    weeklyReportData.selectedOrgs.forEach((org, orgIdx) => {
+      selectedWeeklyMetrics.forEach((metric, metricIdx) => {
+        const idx = orgIdx * selectedWeeklyMetrics.length + metricIdx;
+        const color = colors[idx % colors.length];
+        chartSeries.push({
+          key: `${org} - ${metric}`,
+          label: `${org} - ${metric}`,
+          colorClass: color.text,
+          colorHex: color.hex
+        });
+      });
+    });
+  }
 
-  const safeOrgName = orgName.replace(/[^a-zA-Z0-9]/g, '_').replace(/__+/g, '_').replace(/^_+|_+$/g, '');
-  const baseFilename = `${safeOrgName}_weekly_report`;
+  const displaySeries = weeklyReportData?.isComparison ? chartSeries : metricsList;
+  const insights = generateWeeklyInsights(weeklyReportData, selectedWeeklyMetrics);
 
   // ── Excel Export Helper ──
   const exportToExcel = () => {
     try {
       const wb = XLSX.utils.book_new();
       
-      // Sheet 1: Executive Summary
-      const summaryData = [
-        ['WEEKLY ORGANIZATION PERFORMANCE REPORT'],
-        [],
-        ['Organization Name', orgName],
-        ['Week Starting Date', targetDate],
-        ['Focus Region', region],
-        ['India Cohort', cohort],
-        ['Generated Date', today],
-        [],
-        ['KEY METRICS SUMMARY'],
-        ['Metric Name', 'Current Value', 'Previous Value', 'WoW Change %']
-      ];
-      
-      metricsList.forEach(m => {
-        const colName = m.key;
-        const currentVal = Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx][colName]) || 0;
-        const prevVal = weeklyReportData.selectedIdx > 0 
-          ? (Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx - 1][colName]) || 0) 
-          : null;
-        const changePct = (prevVal !== null && prevVal > 0)
-          ? ((currentVal - prevVal) / prevVal) * 100
-          : null;
-        summaryData.push([
-          m.label,
-          currentVal,
-          prevVal !== null ? prevVal : '—',
-          changePct !== null ? `${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%` : '—'
-        ]);
-      });
-      
-      summaryData.push([]);
-      summaryData.push(['EXECUTIVE INSIGHTS']);
-      insights.forEach(ins => {
-        summaryData.push([`• ${ins}`]);
-      });
-      
-      const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
-      XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary & Insights');
-      
-      // Sheet 2: Historical Progression
-      const historyData = [];
-      const historyHeaders = ['Date'];
-      metricsList.forEach(m => {
-        historyHeaders.push(m.label);
-      });
-      historyData.push(['HISTORICAL PROGRESSION DATA']);
-      historyData.push(historyHeaders);
-      
-      weeklyReportData.historyRows.forEach(row => {
-        const historyRow = [row[weeklyReportData.dateCol]];
+      if (weeklyReportData.isComparison) {
+        // Sheet 1: Executive Summary (Comparison)
+        const summaryData = [
+          ['WEEKLY ORGANIZATION PERFORMANCE COMPARISON REPORT'],
+          [],
+          ['Organizations compared', weeklyReportData.selectedOrgs.join(', ')],
+          ['Target Week Date', targetDate],
+          ['Generated Date', today],
+          [],
+          ['KEY METRICS SUMMARY'],
+          ['Organization', 'Metric Name', 'Current Value', 'Previous Value', 'WoW Change %']
+        ];
+        weeklyReportData.selectedOrgs.forEach(org => {
+          const orgRows = data.filter(r => String(r[weeklyReportData.orgCol]).trim() === org);
+          const currentOrgRow = orgRows.find(r => String(r[weeklyReportData.dateCol]).trim() === targetDate) || {};
+          const prevOrgRow = weeklyReportData.prevDate 
+            ? (orgRows.find(r => String(r[weeklyReportData.dateCol]).trim() === weeklyReportData.prevDate) || {})
+            : {};
+
+          selectedWeeklyMetrics.forEach(colName => {
+            const currentVal = Number(currentOrgRow[colName]) || 0;
+            const prevVal = Number(prevOrgRow[colName]) || 0;
+            const changePct = prevVal > 0 ? ((currentVal - prevVal) / prevVal) * 100 : null;
+            summaryData.push([
+              org,
+              colName,
+              currentVal,
+              prevVal > 0 ? prevVal : '—',
+              changePct !== null ? `${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%` : '—'
+            ]);
+          });
+        });
+
+        summaryData.push([]);
+        summaryData.push(['EXECUTIVE COMPARISON INSIGHTS']);
+        insights.forEach(ins => {
+          summaryData.push([`• ${ins}`]);
+        });
+        
+        const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+        XLSX.utils.book_append_sheet(wb, wsSummary, 'Comparison Summary');
+
+        // Sheet 2: Historical Progression
+        const historyData = [];
+        const historyHeaders = ['Date'];
+        chartSeries.forEach(s => historyHeaders.push(s.label));
+        historyData.push(['HISTORICAL PROGRESSION COMPARISON DATA']);
+        historyData.push(historyHeaders);
+        
+        weeklyReportData.historyRows.forEach(row => {
+          const historyRow = [row[weeklyReportData.dateCol]];
+          chartSeries.forEach(s => {
+            historyRow.push(row[s.key] != null ? Number(row[s.key]) : 0);
+          });
+          historyData.push(historyRow);
+        });
+
+        const wsHistory = XLSX.utils.aoa_to_sheet(historyData);
+        XLSX.utils.book_append_sheet(wb, wsHistory, 'Historical Trend');
+
+        // Sheet 3: Rolling Window Details
+        const windowData = [
+          [`ROLLING ${weeklyReportData.windowSize}-WEEK PERFORMANCE PROFILE DETAILS`],
+          []
+        ];
+        weeklyReportData.orgWindowSummaries.forEach(summary => {
+          windowData.push([`Organization: ${summary.org}`]);
+          windowData.push(['Metric Name', 'Latest Value', 'Rolling Average']);
+          selectedWeeklyMetrics.forEach(metric => {
+            const val = Number(summary.latestRow[metric]) || 0;
+            const vals = summary.windowRows.map(r => Number(r[metric]) || 0);
+            const sum = vals.reduce((a, b) => a + b, 0);
+            const avg = vals.length > 0 ? sum / vals.length : 0;
+            windowData.push([metric, val, avg]);
+          });
+          windowData.push([]);
+        });
+
+        const wsWindow = XLSX.utils.aoa_to_sheet(windowData);
+        XLSX.utils.book_append_sheet(wb, wsWindow, 'Profiles details');
+
+      } else {
+        // Sheet 1: Executive Summary
+        const summaryData = [
+          ['WEEKLY ORGANIZATION PERFORMANCE REPORT'],
+          [],
+          ['Organization Name', displayOrgName],
+          ['Week Starting Date', targetDate],
+          ['Focus Region', region],
+          ['India Cohort', cohort],
+          ['Generated Date', today],
+          [],
+          ['KEY METRICS SUMMARY'],
+          ['Metric Name', 'Current Value', 'Previous Value', 'WoW Change %']
+        ];
+        
         metricsList.forEach(m => {
           const colName = m.key;
-          historyRow.push(row[colName] != null ? Number(row[colName]) : 0);
+          const currentVal = Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx][colName]) || 0;
+          const prevVal = weeklyReportData.selectedIdx > 0 
+            ? (Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx - 1][colName]) || 0) 
+            : null;
+          const changePct = (prevVal !== null && prevVal > 0)
+            ? ((currentVal - prevVal) / prevVal) * 100
+            : null;
+          summaryData.push([
+            m.label,
+            currentVal,
+            prevVal !== null ? prevVal : '—',
+            changePct !== null ? `${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%` : '—'
+          ]);
         });
-        historyData.push(historyRow);
-      });
-      
-      const wsHistory = XLSX.utils.aoa_to_sheet(historyData);
-      XLSX.utils.book_append_sheet(wb, wsHistory, 'Historical Trend');
-      
-      // Sheet 3: Rolling Window Details
-      const windowData = [
-        [`ROLLING ${weeklyReportData.windowSize}-WEEK ACTIVE WINDOW DETAILS`],
-        [],
-        ['Metric Name', ...weeklyReportData.activeWindow.map(w => `${w.label} (${w.date})`)]
-      ];
-      
-      metricsList.forEach(m => {
-        const colName = m.key;
-        const rowVals = [m.label];
-        weeklyReportData.activeWindow.forEach(week => {
-          const val = Number(week.rawRow[colName]) || 0;
-          rowVals.push(val);
+        
+        summaryData.push([]);
+        summaryData.push(['EXECUTIVE INSIGHTS']);
+        insights.forEach(ins => {
+          summaryData.push([`• ${ins}`]);
         });
-        windowData.push(rowVals);
-      });
+        
+        const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
+        XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary & Insights');
+        
+        // Sheet 2: Historical Progression
+        const historyData = [];
+        const historyHeaders = ['Date'];
+        metricsList.forEach(m => {
+          historyHeaders.push(m.label);
+        });
+        historyData.push(['HISTORICAL PROGRESSION DATA']);
+        historyData.push(historyHeaders);
+        
+        weeklyReportData.historyRows.forEach(row => {
+          const historyRow = [row[weeklyReportData.dateCol]];
+          metricsList.forEach(m => {
+            const colName = m.key;
+            historyRow.push(row[colName] != null ? Number(row[colName]) : 0);
+          });
+          historyData.push(historyRow);
+        });
+        
+        const wsHistory = XLSX.utils.aoa_to_sheet(historyData);
+        XLSX.utils.book_append_sheet(wb, wsHistory, 'Historical Trend');
+        
+        // Sheet 3: Rolling Window Details
+        const windowData = [
+          [`ROLLING ${weeklyReportData.windowSize}-WEEK ACTIVE WINDOW DETAILS`],
+          [],
+          ['Metric Name', ...weeklyReportData.activeWindow.map(w => `${w.label} (${w.date})`)]
+        ];
+        
+        metricsList.forEach(m => {
+          const colName = m.key;
+          const rowVals = [m.label];
+          weeklyReportData.activeWindow.forEach(week => {
+            const val = Number(week.rawRow[colName]) || 0;
+            rowVals.push(val);
+          });
+          windowData.push(rowVals);
+        });
+        
+        const wsWindow = XLSX.utils.aoa_to_sheet(windowData);
+        XLSX.utils.book_append_sheet(wb, wsWindow, 'Active Window Details');
+      }
       
-      const wsWindow = XLSX.utils.aoa_to_sheet(windowData);
-      XLSX.utils.book_append_sheet(wb, wsWindow, 'Active Window Details');
-      
-      XLSX.writeFile(wb, `${baseFilename}.xlsx`);
+      XLSX.writeFile(wb, `${reportFilename}.xlsx`);
     } catch (err) {
       console.error('Failed to export Excel:', err);
     }
@@ -1349,7 +1704,7 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
         const pngUrl = canvas.toDataURL('image/png');
         const downloadLink = document.createElement('a');
         downloadLink.href = pngUrl;
-        downloadLink.download = `${baseFilename}.png`;
+        downloadLink.download = `${reportFilename}.png`;
         document.body.appendChild(downloadLink);
         downloadLink.click();
         document.body.removeChild(downloadLink);
@@ -1358,7 +1713,7 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
       image.onerror = () => {
         const downloadLink = document.createElement('a');
         downloadLink.href = blobURL;
-        downloadLink.download = `${baseFilename}.svg`;
+        downloadLink.download = `${reportFilename}.svg`;
         document.body.appendChild(downloadLink);
         downloadLink.click();
         document.body.removeChild(downloadLink);
@@ -1392,30 +1747,119 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
       svgHtml = new XMLSerializer().serializeToString(clonedSvg);
     }
     
-    const metricsHtml = metricsList.map(m => {
-      const colName = m.key;
-      const currentVal = Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx][colName]) || 0;
-      const prevVal = weeklyReportData.selectedIdx > 0 
-        ? (Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx - 1][colName]) || 0) 
-        : null;
-      const changePct = (prevVal !== null && prevVal > 0)
-        ? ((currentVal - prevVal) / prevVal) * 100
-        : null;
-      const changeBadge = changePct !== null
-        ? `<span style="color: ${changePct >= 0 ? '#059669' : '#dc2626'}; font-weight: 600;">
-             ${changePct >= 0 ? '↑' : '↓'} ${Math.abs(changePct).toFixed(1)}%
-           </span>`
-        : '<span style="color: #94a3b8;">—</span>';
+    let metricsHtml = '';
+    let rollingWeeksHtml = '';
+    
+    if (weeklyReportData.isComparison) {
+      metricsHtml = weeklyReportData.selectedOrgs.map(org => {
+        const orgRows = data.filter(r => String(r[weeklyReportData.orgCol]).trim() === org);
+        const currentOrgRow = orgRows.find(r => String(r[weeklyReportData.dateCol]).trim() === targetDate) || {};
+        const prevOrgRow = weeklyReportData.prevDate 
+          ? (orgRows.find(r => String(r[weeklyReportData.dateCol]).trim() === weeklyReportData.prevDate) || {})
+          : {};
+
+        return selectedWeeklyMetrics.map(colName => {
+          const currentVal = Number(currentOrgRow[colName]) || 0;
+          const prevVal = Number(prevOrgRow[colName]) || 0;
+          const changePct = prevVal > 0 ? ((currentVal - prevVal) / prevVal) * 100 : null;
+          const changeBadge = changePct !== null
+            ? `<span style="color: ${changePct >= 0 ? '#059669' : '#dc2626'}; font-weight: 600;">
+                 ${changePct >= 0 ? '↑' : '↓'} ${Math.abs(changePct).toFixed(1)}%
+               </span>`
+            : '<span style="color: #94a3b8;">—</span>';
+          return `
+            <tr style="border-top: 1px solid #e2e8f0;">
+              <td style="padding: 12px 16px; font-weight: 600; color: #7c3aed;">${org}</td>
+              <td style="padding: 12px 16px; font-weight: 500; color: #334155;">${colName}</td>
+              <td style="padding: 12px 16px; text-align: right; font-family: monospace; color: #1e293b;">${currentVal.toLocaleString()}</td>
+              <td style="padding: 12px 16px; text-align: right; font-family: monospace; color: #475569;">${prevVal > 0 ? prevVal.toLocaleString() : '—'}</td>
+              <td style="padding: 12px 16px; text-align: right;">${changeBadge}</td>
+            </tr>
+          `;
+        }).join('');
+      }).join('');
+
+      rollingWeeksHtml = weeklyReportData.orgWindowSummaries.map(summary => {
+        const org = summary.org;
+        const firstRow = summary.windowRows[0] || {};
+        const regionKey = Object.keys(firstRow).find(k => k.toLowerCase().includes('region')) || 'Region';
+        const cohortKey = Object.keys(firstRow).find(k => k.toLowerCase().includes('cohort')) || 'Cohort';
+        const region = firstRow[regionKey] || '—';
+        const cohort = firstRow[cohortKey] || '—';
+
+        const metricsListHtml = selectedWeeklyMetrics.map(metric => {
+          const val = Number(summary.latestRow[metric]) || 0;
+          const vals = summary.windowRows.map(r => Number(r[metric]) || 0);
+          const sum = vals.reduce((a, b) => a + b, 0);
+          const avg = vals.length > 0 ? sum / vals.length : 0;
+          return `
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 4px;">
+              <span style="color: #64748b;">${metric}</span>
+              <span style="font-weight: 600; color: #334155;">${val.toLocaleString()} (Rolling Avg: ${avg.toFixed(1)})</span>
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div style="flex: 1; min-width: 240px; border: 1px solid #e2e8f0; background-color: #ffffff; padding: 16px; border-radius: 12px; margin-bottom: 12px;">
+            <div style="font-size: 12px; font-weight: bold; color: #7c3aed; margin-bottom: 4px;">${org}</div>
+            <div style="font-size: 10px; color: #64748b; margin-bottom: 8px;">Region: ${region} · Cohort: ${cohort}</div>
+            <div>${metricsListHtml}</div>
+          </div>
+        `;
+      }).join('');
+    } else {
+      metricsHtml = metricsList.map(m => {
+        const colName = m.key;
+        const currentVal = Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx][colName]) || 0;
+        const prevVal = weeklyReportData.selectedIdx > 0 
+          ? (Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx - 1][colName]) || 0) 
+          : null;
+        const changePct = (prevVal !== null && prevVal > 0)
+          ? ((currentVal - prevVal) / prevVal) * 100
+          : null;
+        const changeBadge = changePct !== null
+          ? `<span style="color: ${changePct >= 0 ? '#059669' : '#dc2626'}; font-weight: 600;">
+               ${changePct >= 0 ? '↑' : '↓'} ${Math.abs(changePct).toFixed(1)}%
+             </span>`
+          : '<span style="color: #94a3b8;">—</span>';
+          
+        return `
+          <tr style="border-top: 1px solid #e2e8f0;">
+            <td style="padding: 12px 16px; font-weight: 500; color: #334155;">${m.label}</td>
+            <td style="padding: 12px 16px; text-align: right; font-family: monospace; color: #1e293b;">${currentVal.toLocaleString()}</td>
+            <td style="padding: 12px 16px; text-align: right; font-family: monospace; color: #475569;">${prevVal !== null ? prevVal.toLocaleString() : '—'}</td>
+            <td style="padding: 12px 16px; text-align: right;">${changeBadge}</td>
+          </tr>
+        `;
+      }).join('');
+
+      rollingWeeksHtml = weeklyReportData.activeWindow.map(week => {
+        const isSelectedWeek = week.date === targetDate;
+        const weekMetricsHtml = metricsList.map(m => {
+          const colName = m.key;
+          const val = Number(week.rawRow[colName]) || 0;
+          return `
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 4px;">
+              <span style="color: #64748b;">${m.label.replace('Current ', '')}</span>
+              <span style="font-weight: 600; color: #334155;">${val.toLocaleString()}</span>
+            </div>
+          `;
+        }).join('');
         
-      return `
-        <tr style="border-top: 1px solid #e2e8f0;">
-          <td style="padding: 12px 16px; font-weight: 500; color: #334155;">${m.label}</td>
-          <td style="padding: 12px 16px; text-align: right; font-family: monospace; color: #1e293b;">${currentVal.toLocaleString()}</td>
-          <td style="padding: 12px 16px; text-align: right; font-family: monospace; color: #475569;">${prevVal !== null ? prevVal.toLocaleString() : '—'}</td>
-          <td style="padding: 12px 16px; text-align: right;">${changeBadge}</td>
-        </tr>
-      `;
-    }).join('');
+        return `
+          <div style="flex: 1; min-width: 160px; border: 1px solid ${isSelectedWeek ? '#8b5cf6' : '#e2e8f0'}; background-color: ${isSelectedWeek ? '#f5f3ff' : '#ffffff'}; padding: 12px; border-radius: 12px;">
+            <div style="font-size: 10px; font-weight: bold; color: ${isSelectedWeek ? '#7c3aed' : '#64748b'}; text-transform: uppercase;">
+              ${week.label} ${isSelectedWeek ? '(Target)' : ''}
+            </div>
+            <div style="font-family: monospace; font-size: 11px; font-weight: 600; margin-bottom: 8px; color: #475569;">
+              ${new Date(week.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+            </div>
+            <div>${weekMetricsHtml}</div>
+          </div>
+        `;
+      }).join('');
+    }
     
     const insightsHtml = insights.map(ins => `
       <li style="margin-bottom: 10px; display: flex; align-items: start; gap: 8px;">
@@ -1424,38 +1868,14 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
       </li>
     `).join('');
     
-    const rollingWeeksHtml = weeklyReportData.activeWindow.map(week => {
-      const isSelectedWeek = week.date === targetDate;
-      const weekMetricsHtml = metricsList.map(m => {
-        const colName = m.key;
-        const val = Number(week.rawRow[colName]) || 0;
-        return `
-          <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 4px;">
-            <span style="color: #64748b;">${m.label.replace('Current ', '')}</span>
-            <span style="font-weight: 600; color: #334155;">${val.toLocaleString()}</span>
-          </div>
-        `;
-      }).join('');
-      
-      return `
-        <div style="flex: 1; min-width: 160px; border: 1px solid ${isSelectedWeek ? '#8b5cf6' : '#e2e8f0'}; background-color: ${isSelectedWeek ? '#f5f3ff' : '#ffffff'}; padding: 12px; border-radius: 12px;">
-          <div style="font-size: 10px; font-weight: bold; color: ${isSelectedWeek ? '#7c3aed' : '#64748b'}; text-transform: uppercase;">
-            ${week.label} ${isSelectedWeek ? '(Target)' : ''}
-          </div>
-          <div style="font-family: monospace; font-size: 11px; font-weight: 600; margin-bottom: 8px; color: #475569;">
-            ${new Date(week.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-          </div>
-          <div>${weekMetricsHtml}</div>
-        </div>
-      `;
-    }).join('');
+    const subtitleText = weeklyReportData.isComparison ? weeklyReportData.selectedOrgs.join(' vs. ') : displayOrgName;
     
     const fullHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Weekly Org Performance Report - ${orgName}</title>
+  <title>Weekly Org Performance Report</title>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     body {
@@ -1587,21 +2007,24 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
 <body>
   <div class="container">
     <div class="header">
-      <h1 class="title">Weekly Organization Performance Report</h1>
-      <p class="subtitle">${orgName}</p>
+      <h1 class="title">${weeklyReportData.isComparison ? 'Weekly Performance Comparison Report' : 'Weekly Organization Performance Report'}</h1>
+      <p class="subtitle">${subtitleText}</p>
+      ${!weeklyReportData.isComparison ? `
       <div style="margin-bottom: 12px;">
         <span class="meta-tag">Region: ${region}</span>
         <span class="meta-tag meta-tag-purple">Cohort: ${cohort}</span>
       </div>
+      ` : ''}
       <p style="font-size: 11px; color: #64748b; margin: 0;">
         Week starting: <strong>${targetDate}</strong> · Generated on ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
       </p>
     </div>
     
-    <div class="section-title">Key Metrics Summary</div>
+    <div class="section-title">Key Performance Data Summary</div>
     <table>
       <thead>
         <tr>
+          ${weeklyReportData.isComparison ? '<th style="text-align: left;">Organization</th>' : ''}
           <th style="text-align: left;">Metric Name</th>
           <th style="text-align: right;">Current Value</th>
           <th style="text-align: right;">Previous Value</th>
@@ -1618,27 +2041,16 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
       ${svgHtml}
     </div>
     
-    <div class="section-title">Weekly Executive Insights</div>
+    <div class="section-title">Weekly Performance Insights</div>
     <div class="insights-box">
       <ul class="insights-list">
         ${insightsHtml}
       </ul>
     </div>
     
-    <div class="section-title">Rolling ${weeklyReportData.windowSize}-Week Active Window Details</div>
+    <div class="section-title">${weeklyReportData.isComparison ? 'Organization Rolling Performance Summaries' : `Rolling ${weeklyReportData.windowSize}-Week Active Window Details`}</div>
     <div class="rolling-grid">
       ${rollingWeeksHtml}
-    </div>
-    
-    <div class="section-title">Rolling Window Transition</div>
-    <div class="transition-box">
-      <p style="margin: 0 0 8px 0;">To compute the rolling ${weeklyReportData.windowSize === 12 ? 'Quarter' : 'Monthly Active Users (MAU)'} as of <strong>${targetDate}</strong>:</p>
-      <ul style="margin: 0; padding-left: 20px;">
-        ${weeklyReportData.droppedWeekDate 
-          ? `<li style="margin-bottom: 4px;">Oldest week <span style="color: #ef4444; font-weight: 600;">${weeklyReportData.droppedWeekDate}</span> was dropped from the rolling window.</li>`
-          : '<li style="margin-bottom: 4px;">Initial window setup phase: no week dropped yet.</li>'}
-        <li>New week <span style="color: #10b981; font-weight: 600;">${targetDate}</span> was added.</li>
-      </ul>
     </div>
     
     <div class="footer">
@@ -1652,7 +2064,7 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
     const htmlUrl = URL.createObjectURL(blob);
     const downloadLink = document.createElement('a');
     downloadLink.href = htmlUrl;
-    downloadLink.download = `${baseFilename}.html`;
+    downloadLink.download = `${reportFilename}.html`;
     document.body.appendChild(downloadLink);
     downloadLink.click();
     document.body.removeChild(downloadLink);
@@ -1662,35 +2074,60 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
   // ── TXT Export Helper ──
   const exportToTXT = () => {
     let txt = `========================================================\n`;
-    txt += `WEEKLY ORGANIZATION PERFORMANCE REPORT\n`;
+    txt += weeklyReportData.isComparison ? `WEEKLY PERFORMANCE COMPARISON REPORT\n` : `WEEKLY ORGANIZATION PERFORMANCE REPORT\n`;
     txt += `========================================================\n\n`;
-    txt += `Organization Name : ${orgName}\n`;
-    txt += `Target Date       : ${targetDate}\n`;
-    txt += `Focus Region      : ${region}\n`;
-    txt += `India Cohort      : ${cohort}\n`;
-    txt += `Generated On      : ${today}\n\n`;
+    txt += weeklyReportData.isComparison ? `Organizations : ${weeklyReportData.selectedOrgs.join(', ')}\n` : `Organization  : ${displayOrgName}\n`;
+    txt += `Target Date   : ${targetDate}\n`;
+    if (!weeklyReportData.isComparison) {
+      txt += `Focus Region  : ${region}\n`;
+      txt += `India Cohort  : ${cohort}\n`;
+    }
+    txt += `Generated On  : ${today}\n\n`;
     
     txt += `--------------------------------------------------------\n`;
     txt += `KEY METRICS SUMMARY\n`;
     txt += `--------------------------------------------------------\n`;
-    txt += `${'Metric Name'.padEnd(25)} ${'Current Val'.padEnd(15)} ${'Previous Val'.padEnd(15)} ${'WoW Change'.padEnd(15)}\n`;
     
-    metricsList.forEach(m => {
-      const colName = m.key;
-      const currentVal = Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx][colName]) || 0;
-      const prevVal = weeklyReportData.selectedIdx > 0 
-        ? (Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx - 1][colName]) || 0) 
-        : null;
-      const changePct = (prevVal !== null && prevVal > 0)
-        ? ((currentVal - prevVal) / prevVal) * 100
-        : null;
-      
-      const currentStr = currentVal.toLocaleString();
-      const prevStr = prevVal !== null ? prevVal.toLocaleString() : '—';
-      const changeStr = changePct !== null ? `${changePct >= 0 ? '↑' : '↓'} ${Math.abs(changePct).toFixed(1)}%` : '—';
-      
-      txt += `${m.label.padEnd(25)} ${currentStr.padEnd(15)} ${prevStr.padEnd(15)} ${changeStr.padEnd(15)}\n`;
-    });
+    if (weeklyReportData.isComparison) {
+      txt += `${'Organization'.padEnd(25)} ${'Metric Name'.padEnd(25)} ${'Current Val'.padEnd(15)} ${'Previous Val'.padEnd(15)} ${'WoW Change'.padEnd(15)}\n`;
+      weeklyReportData.selectedOrgs.forEach(org => {
+        const orgRows = data.filter(r => String(r[weeklyReportData.orgCol]).trim() === org);
+        const currentOrgRow = orgRows.find(r => String(r[weeklyReportData.dateCol]).trim() === targetDate) || {};
+        const prevOrgRow = weeklyReportData.prevDate 
+          ? (orgRows.find(r => String(r[weeklyReportData.dateCol]).trim() === weeklyReportData.prevDate) || {})
+          : {};
+
+        selectedWeeklyMetrics.forEach(colName => {
+          const currentVal = Number(currentOrgRow[colName]) || 0;
+          const prevVal = Number(prevOrgRow[colName]) || 0;
+          const changePct = prevVal > 0 ? ((currentVal - prevVal) / prevVal) * 100 : null;
+          
+          const currentStr = currentVal.toLocaleString();
+          const prevStr = prevVal > 0 ? prevVal.toLocaleString() : '—';
+          const changeStr = changePct !== null ? `${changePct >= 0 ? '↑' : '↓'} ${Math.abs(changePct).toFixed(1)}%` : '—';
+          
+          txt += `${org.slice(0,23).padEnd(25)} ${colName.slice(0,23).padEnd(25)} ${currentStr.padEnd(15)} ${prevStr.padEnd(15)} ${changeStr.padEnd(15)}\n`;
+        });
+      });
+    } else {
+      txt += `${'Metric Name'.padEnd(25)} ${'Current Val'.padEnd(15)} ${'Previous Val'.padEnd(15)} ${'WoW Change'.padEnd(15)}\n`;
+      metricsList.forEach(m => {
+        const colName = m.key;
+        const currentVal = Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx][colName]) || 0;
+        const prevVal = weeklyReportData.selectedIdx > 0 
+          ? (Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx - 1][colName]) || 0) 
+          : null;
+        const changePct = (prevVal !== null && prevVal > 0)
+          ? ((currentVal - prevVal) / prevVal) * 100
+          : null;
+        
+        const currentStr = currentVal.toLocaleString();
+        const prevStr = prevVal !== null ? prevVal.toLocaleString() : '—';
+        const changeStr = changePct !== null ? `${changePct >= 0 ? '↑' : '↓'} ${Math.abs(changePct).toFixed(1)}%` : '—';
+        
+        txt += `${m.label.padEnd(25)} ${currentStr.padEnd(15)} ${prevStr.padEnd(15)} ${changeStr.padEnd(15)}\n`;
+      });
+    }
     
     txt += `\n--------------------------------------------------------\n`;
     txt += `WEEKLY EXECUTIVE INSIGHTS\n`;
@@ -1700,34 +2137,41 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
     });
     
     txt += `\n--------------------------------------------------------\n`;
-    txt += `ROLLING ${weeklyReportData.windowSize}-WEEK ACTIVE WINDOW DETAILS\n`;
-    txt += `--------------------------------------------------------\n`;
-    weeklyReportData.activeWindow.forEach(week => {
-      const isSelected = week.date === targetDate;
-      txt += `${week.label} ${isSelected ? '(Target)' : ''} [${week.date}]:\n`;
-      metricsList.forEach(m => {
-        const colName = m.key;
-        const val = Number(week.rawRow[colName]) || 0;
-        txt += `  - ${m.label.replace('Current ', '')}: ${val.toLocaleString()}\n`;
+    if (weeklyReportData.isComparison) {
+      txt += `ORGANIZATION ROLLING WINDOW PERFORMANCE PROFILES\n`;
+      txt += `--------------------------------------------------------\n`;
+      weeklyReportData.orgWindowSummaries.forEach(summary => {
+        txt += `Organization: ${summary.org}\n`;
+        selectedWeeklyMetrics.forEach(metric => {
+          const val = Number(summary.latestRow[metric]) || 0;
+          const vals = summary.windowRows.map(r => Number(r[metric]) || 0);
+          const sum = vals.reduce((a, b) => a + b, 0);
+          const avg = vals.length > 0 ? sum / vals.length : 0;
+          txt += `  - ${metric}: Latest: ${val.toLocaleString()} | Rolling Average (${weeklyReportData.windowSize}W): ${avg.toFixed(1)}\n`;
+        });
+        txt += `\n`;
       });
-    });
-    
-    txt += `\n--------------------------------------------------------\n`;
-    txt += `ROLLING WINDOW TRANSITION DETAILS\n`;
-    txt += `--------------------------------------------------------\n`;
-    if (weeklyReportData.droppedWeekDate) {
-      txt += `- Oldest week [${weeklyReportData.droppedWeekDate}] was dropped.\n`;
     } else {
-      txt += `- Initial window setup: no week dropped yet.\n`;
+      txt += `ROLLING ${weeklyReportData.windowSize}-WEEK ACTIVE WINDOW DETAILS\n`;
+      txt += `--------------------------------------------------------\n`;
+      weeklyReportData.activeWindow.forEach(week => {
+        const isSelected = week.date === targetDate;
+        txt += `${week.label} ${isSelected ? '(Target)' : ''} [${week.date}]:\n`;
+        metricsList.forEach(m => {
+          const colName = m.key;
+          const val = Number(week.rawRow[colName]) || 0;
+          txt += `  - ${m.label.replace('Current ', '')}: ${val.toLocaleString()}\n`;
+        });
+      });
     }
-    txt += `- New week [${targetDate}] was added.\n\n`;
+    
     txt += `Report generated by InsightForge\n`;
     
     const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const downloadLink = document.createElement('a');
     downloadLink.href = url;
-    downloadLink.download = `${baseFilename}.txt`;
+    downloadLink.download = `${reportFilename}.txt`;
     document.body.appendChild(downloadLink);
     downloadLink.click();
     document.body.removeChild(downloadLink);
@@ -1774,26 +2218,42 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
         }
       `}} />
       <div className={`min-h-screen ${dark ? 'bg-slate-900' : 'bg-white'} print:bg-white`}>
-        <div className="no-print sticky top-0 z-10 flex items-center justify-between px-8 py-4 border-b backdrop-blur-sm"
+        <div className="no-print sticky top-0 z-10 flex flex-col md:flex-row md:items-center justify-between gap-4 px-4 sm:px-8 py-3 sm:py-4 border-b backdrop-blur-sm"
           style={{ backgroundColor: dark ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.95)', borderColor: dark ? '#1e293b' : '#e2e8f0' }}>
-          <h2 className={`text-lg font-bold ${dark ? 'text-white' : 'text-slate-800'}`}>Weekly Report Preview</h2>
-          <div className="flex gap-3 relative">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 flex-1 w-full">
+            <h2 className={`text-sm sm:text-base font-bold ${dark ? 'text-white' : 'text-slate-800'}`}>Weekly Report Preview</h2>
+            <div className="flex-1 w-full max-w-full sm:max-w-xs md:max-w-sm">
+              <input 
+                type="text" 
+                value={reportFilename} 
+                onChange={(e) => setReportFilename(e.target.value.replace(/[^a-zA-Z0-9_-]/g, '_'))}
+                placeholder="Report Filename"
+                className={`w-full px-3 py-1.5 rounded-lg border text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/50 ${
+                  dark 
+                    ? 'bg-slate-800 border-slate-700 text-white placeholder-slate-500' 
+                    : 'bg-white border-slate-300 text-slate-800 placeholder-slate-400'
+                }`}
+                title="Edit report filename for exports"
+              />
+            </div>
+          </div>
+          <div className="flex flex-wrap sm:flex-nowrap gap-2 sm:gap-3 w-full sm:w-auto justify-end">
             <button 
               onClick={() => {
                 const originalTitle = document.title;
-                document.title = baseFilename;
+                document.title = reportFilename;
                 window.print();
                 document.title = originalTitle;
               }} 
-              className="px-5 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-500 transition-colors flex items-center gap-1.5 shadow-sm"
+              className="flex-1 sm:flex-initial px-3 sm:px-5 py-2 rounded-lg bg-blue-600 text-white text-xs sm:text-sm font-semibold hover:bg-blue-500 transition-colors flex items-center justify-center gap-1.5 shadow-sm"
             >
-              <span>🖨️</span> Print / Save as PDF
+              <span>🖨️</span> Print / PDF
             </button>
             
-            <div className="relative">
+            <div className="relative flex-1 sm:flex-initial">
               <button 
                 onClick={() => setExportOpen(!exportOpen)} 
-                className={`px-5 py-2 rounded-lg text-sm font-semibold border transition-colors flex items-center gap-1.5 shadow-sm ${
+                className={`w-full px-3 sm:px-5 py-2 rounded-lg text-xs sm:text-sm font-semibold border transition-colors flex items-center justify-center gap-1.5 shadow-sm ${
                   dark 
                     ? 'border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700' 
                     : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
@@ -1805,7 +2265,7 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
               {exportOpen && (
                 <>
                   <div className="fixed inset-0 z-30" onClick={() => setExportOpen(false)} />
-                  <div className={`absolute right-0 mt-2 w-56 rounded-xl border shadow-xl z-40 py-1.5 animate-fadeIn ${
+                  <div className={`absolute right-0 mt-2 w-52 rounded-xl border shadow-xl z-40 py-1.5 animate-fadeIn ${
                     dark 
                       ? 'bg-slate-800 border-slate-700 text-slate-200' 
                       : 'bg-white border-slate-200 text-slate-700'
@@ -1839,31 +2299,37 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
               )}
             </div>
             
-            <button onClick={onClose} className={`px-5 py-2 rounded-lg text-sm font-semibold border transition-colors ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-800' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`}>✕ Close</button>
+            <button onClick={onClose} className={`flex-1 sm:flex-initial px-3 sm:px-5 py-2 rounded-lg text-xs sm:text-sm font-semibold border transition-colors ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-800' : 'border-slate-300 text-slate-600 hover:bg-slate-100'}`}>✕ Close</button>
           </div>
         </div>
         
         <div className="max-w-4xl mx-auto px-8 py-12 print:px-4 print:py-6">
           {/* Header block */}
           <div className="text-center mb-10 print:mb-6">
-            <h1 className={`text-3xl font-extrabold mb-2 print:text-black ${dark ? 'text-white' : 'text-slate-800'}`}>Weekly Organization Performance Report</h1>
-            <p className={`text-sm print:text-slate-500 ${dark ? 'text-slate-400' : 'text-slate-500'}`}>{orgName}</p>
+            <h1 className={`text-3xl font-extrabold mb-2 print:text-black ${dark ? 'text-white' : 'text-slate-800'}`}>
+              {weeklyReportData.isComparison ? 'Weekly Performance Comparison Report' : 'Weekly Organization Performance Report'}
+            </h1>
+            <p className={`text-sm print:text-slate-500 ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+              {weeklyReportData.isComparison ? weeklyReportData.selectedOrgs.join(' vs. ') : displayOrgName}
+            </p>
             <p className={`text-xs mt-1 print:text-slate-400 ${dark ? 'text-slate-500' : 'text-slate-400'}`}>Week starting: <span className="font-semibold text-violet-500">{targetDate}</span> · Generated on {today}</p>
           </div>
 
-          {/* Metadata */}
-          <div className={`rounded-xl p-4 mb-6 border print:border-slate-200 ${dark ? 'bg-slate-800/40 border-slate-700/50' : 'bg-slate-50 border-slate-200'}`}>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <span className={`block text-xs font-semibold ${dark ? 'text-slate-500' : 'text-slate-400'}`}>Focus Region</span>
-                <span className={`font-bold ${dark ? 'text-slate-200' : 'text-slate-800'}`}>{region}</span>
-              </div>
-              <div>
-                <span className={`block text-xs font-semibold ${dark ? 'text-slate-500' : 'text-slate-400'}`}>India Cohort</span>
-                <span className={`font-bold ${dark ? 'text-slate-200' : 'text-slate-800'}`}>{cohort}</span>
+          {/* Metadata (Only for single mode) */}
+          {!weeklyReportData.isComparison && (
+            <div className={`rounded-xl p-4 mb-6 border print:border-slate-200 ${dark ? 'bg-slate-800/40 border-slate-700/50' : 'bg-slate-50 border-slate-200'}`}>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className={`block text-xs font-semibold ${dark ? 'text-slate-500' : 'text-slate-400'}`}>Focus Region</span>
+                  <span className={`font-bold ${dark ? 'text-slate-200' : 'text-slate-800'}`}>{region}</span>
+                </div>
+                <div>
+                  <span className={`block text-xs font-semibold ${dark ? 'text-slate-500' : 'text-slate-400'}`}>India Cohort</span>
+                  <span className={`font-bold ${dark ? 'text-slate-200' : 'text-slate-800'}`}>{cohort}</span>
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           {/* Key Metrics Table */}
           <div className="mb-8">
@@ -1872,6 +2338,7 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
               <table className={`w-full text-sm border-collapse ${dark ? 'text-slate-300' : 'text-slate-600'}`}>
                 <thead>
                   <tr className={`${dark ? 'bg-slate-800' : 'bg-slate-100'} print:bg-slate-100`}>
+                    {weeklyReportData.isComparison && <th className="text-left px-4 py-2.5 font-semibold print:text-slate-700">Organization</th>}
                     <th className="text-left px-4 py-2.5 font-semibold print:text-slate-700">Metric Name</th>
                     <th className="text-right px-4 py-2.5 font-semibold print:text-slate-700 font-mono-data">Current Value</th>
                     <th className="text-right px-4 py-2.5 font-semibold print:text-slate-700 font-mono-data">Previous Value</th>
@@ -1879,33 +2346,67 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
                   </tr>
                 </thead>
                 <tbody>
-                  {metricsList.map(m => {
-                    const colName = m.key;
-                    const currentVal = Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx][colName]) || 0;
-                    const prevVal = weeklyReportData.selectedIdx > 0 
-                      ? (Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx - 1][colName]) || 0) 
-                      : null;
-                    const changePct = (prevVal !== null && prevVal > 0)
-                      ? ((currentVal - prevVal) / prevVal) * 100
-                      : null;
+                  {weeklyReportData.isComparison ? (
+                    weeklyReportData.selectedOrgs.map(org => {
+                      const orgRows = data.filter(r => String(r[weeklyReportData.orgCol]).trim() === org);
+                      const currentOrgRow = orgRows.find(r => String(r[weeklyReportData.dateCol]).trim() === targetDate) || {};
+                      const prevOrgRow = weeklyReportData.prevDate 
+                        ? (orgRows.find(r => String(r[weeklyReportData.dateCol]).trim() === weeklyReportData.prevDate) || {})
+                        : {};
 
-                    return (
-                      <tr key={m.key} className={`border-t ${dark ? 'border-slate-700' : 'border-slate-200'} print:border-slate-200`}>
-                        <td className="px-4 py-2.5 font-medium print:text-slate-700">{m.label}</td>
-                        <td className="px-4 py-2.5 text-right font-mono-data print:text-slate-700">{currentVal.toLocaleString()}</td>
-                        <td className="px-4 py-2.5 text-right font-mono-data print:text-slate-700">{prevVal !== null ? prevVal.toLocaleString() : '—'}</td>
-                        <td className="px-4 py-2.5 text-right font-semibold">
-                          {changePct !== null ? (
-                            <span className={changePct >= 0 ? 'text-emerald-600' : 'text-red-500'}>
-                              {changePct >= 0 ? '↑' : '↓'} {Math.abs(changePct).toFixed(1)}%
-                            </span>
-                          ) : (
-                            <span className={dark ? 'text-slate-500' : 'text-slate-400'}>—</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                      return selectedWeeklyMetrics.map(colName => {
+                        const currentVal = Number(currentOrgRow[colName]) || 0;
+                        const prevVal = Number(prevOrgRow[colName]) || 0;
+                        const changePct = prevVal > 0 ? ((currentVal - prevVal) / prevVal) * 100 : null;
+
+                        return (
+                          <tr key={`${org}-${colName}`} className={`border-t ${dark ? 'border-slate-700' : 'border-slate-200'} print:border-slate-200`}>
+                            <td className="px-4 py-2.5 font-semibold text-violet-500 print:text-violet-700">{org}</td>
+                            <td className="px-4 py-2.5 font-medium print:text-slate-700">{colName}</td>
+                            <td className="px-4 py-2.5 text-right font-mono-data print:text-slate-700">{currentVal.toLocaleString()}</td>
+                            <td className="px-4 py-2.5 text-right font-mono-data print:text-slate-700">{prevVal > 0 ? prevVal.toLocaleString() : '—'}</td>
+                            <td className="px-4 py-2.5 text-right font-semibold">
+                              {changePct !== null ? (
+                                <span className={changePct >= 0 ? 'text-emerald-600' : 'text-red-500'}>
+                                  {changePct >= 0 ? '↑' : '↓'} {Math.abs(changePct).toFixed(1)}%
+                                </span>
+                              ) : (
+                                <span className={dark ? 'text-slate-500' : 'text-slate-400'}>—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      });
+                    })
+                  ) : (
+                    metricsList.map(m => {
+                      const colName = m.key;
+                      const currentVal = Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx][colName]) || 0;
+                      const prevVal = weeklyReportData.selectedIdx > 0 
+                        ? (Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx - 1][colName]) || 0) 
+                        : null;
+                      const changePct = (prevVal !== null && prevVal > 0)
+                        ? ((currentVal - prevVal) / prevVal) * 100
+                        : null;
+
+                      return (
+                        <tr key={m.key} className={`border-t ${dark ? 'border-slate-700' : 'border-slate-200'} print:border-slate-200`}>
+                          <td className="px-4 py-2.5 font-medium print:text-slate-700">{m.label}</td>
+                          <td className="px-4 py-2.5 text-right font-mono-data print:text-slate-700">{currentVal.toLocaleString()}</td>
+                          <td className="px-4 py-2.5 text-right font-mono-data print:text-slate-700">{prevVal !== null ? prevVal.toLocaleString() : '—'}</td>
+                          <td className="px-4 py-2.5 text-right font-semibold">
+                            {changePct !== null ? (
+                              <span className={changePct >= 0 ? 'text-emerald-600' : 'text-red-500'}>
+                                {changePct >= 0 ? '↑' : '↓'} {Math.abs(changePct).toFixed(1)}%
+                              </span>
+                            ) : (
+                              <span className={dark ? 'text-slate-500' : 'text-slate-400'}>—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1921,16 +2422,12 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
                 <ResponsiveContainer>
                   <ComposedChart data={weeklyReportData.historyRows}>
                     <CartesianGrid strokeDasharray="3 3" stroke={dark ? '#334155' : '#e2e8f0'} vertical={false} />
-                    <XAxis 
-                      dataKey={weeklyReportData.dateCol} 
+                  <XAxis 
+                      dataKey="__weekLabel" 
                       stroke={dark ? '#64748b' : '#94a3b8'} 
                       fontSize={10} 
                       tickLine={false} 
                       axisLine={false}
-                      tickFormatter={(str) => {
-                        const d = new Date(str);
-                        return isNaN(d) ? str : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                      }}
                     />
                     <YAxis 
                       stroke={dark ? '#64748b' : '#94a3b8'} 
@@ -1950,43 +2447,51 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
                       label={{ value: 'Target Week', fill: dark ? '#c084fc' : '#6b21a8', fontSize: 10, position: 'top' }} 
                     />
                     
-                    {metricsList.map(m => {
-                      const colName = m.key;
-                      const color = m.colorHex;
+                    {displaySeries.map(s => {
+                      const labelConfig = {
+                        position: 'top',
+                        formatter: formatAxisTick,
+                        fill: dark ? '#cbd5e1' : '#475569',
+                        fontSize: 9,
+                        fontWeight: 600
+                      };
                       if (weeklyChartType === 'bar') {
                         return (
                           <Bar 
-                            key={m.key} 
-                            dataKey={colName} 
-                            name={m.label} 
-                            fill={color} 
+                            key={s.key} 
+                            dataKey={s.key} 
+                            name={s.label} 
+                            fill={s.colorHex} 
                             radius={[4, 4, 0, 0]}
+                            label={labelConfig}
                           />
                         );
                       } else if (weeklyChartType === 'area') {
                         return (
                           <Area 
-                            key={m.key} 
+                            key={s.key} 
                             type="monotone"
-                            dataKey={colName} 
-                            name={m.label} 
-                            stroke={color} 
-                            fill={color} 
+                            dataKey={s.key} 
+                            name={s.label} 
+                            stroke={s.colorHex} 
+                            fill={s.colorHex} 
                             fillOpacity={0.15}
                             strokeWidth={2}
+                            label={labelConfig}
                           />
                         );
                       } else {
                         return (
                           <Line 
-                            key={m.key} 
+                            key={s.key} 
                             type="monotone" 
-                            dataKey={colName} 
-                            name={m.label} 
-                            stroke={color} 
+                            dataKey={s.key} 
+                            name={s.label} 
+                            stroke={s.colorHex} 
                             strokeWidth={3} 
                             dot={{ r: 4, strokeWidth: 1 }}
                             activeDot={{ r: 7, strokeWidth: 0 }}
+                            label={labelConfig}
                           />
                         );
                       }
@@ -2000,15 +2505,11 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
                 <ComposedChart width={680} height={320} data={weeklyReportData.historyRows} margin={{ top: 20, right: 30, bottom: 20, left: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
                   <XAxis 
-                    dataKey={weeklyReportData.dateCol} 
+                    dataKey="__weekLabel" 
                     stroke="#94a3b8" 
                     fontSize={10} 
                     tickLine={false} 
                     axisLine={false}
-                    tickFormatter={(str) => {
-                      const d = new Date(str);
-                      return isNaN(d) ? str : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                    }}
                   />
                   <YAxis 
                     stroke="#94a3b8" 
@@ -2027,46 +2528,54 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
                     label={{ value: 'Target Week', fill: '#6b21a8', fontSize: 10, position: 'top' }} 
                   />
                   
-                  {metricsList.map(m => {
-                    const colName = m.key;
-                    const color = m.colorHex;
-                    if (weeklyChartType === 'bar') {
-                      return (
-                        <Bar 
-                          key={m.key} 
-                          dataKey={colName} 
-                          name={m.label} 
-                          fill={color} 
-                          radius={[4, 4, 0, 0]}
-                        />
-                      );
-                    } else if (weeklyChartType === 'area') {
-                      return (
-                        <Area 
-                          key={m.key} 
-                          type="monotone"
-                          dataKey={colName} 
-                          name={m.label} 
-                          stroke={color} 
-                          fill={color} 
-                          fillOpacity={0.15}
-                          strokeWidth={2}
-                        />
-                      );
-                    } else {
-                      return (
-                        <Line 
-                          key={m.key} 
-                          type="monotone" 
-                          dataKey={colName} 
-                          name={m.label} 
-                          stroke={color} 
-                          strokeWidth={3} 
-                          dot={{ r: 4, strokeWidth: 1 }}
-                        />
-                      );
-                    }
-                  })}
+                   {displaySeries.map(s => {
+                     const labelConfig = {
+                       position: 'top',
+                       formatter: formatAxisTick,
+                       fill: '#475569',
+                       fontSize: 9,
+                       fontWeight: 600
+                     };
+                     if (weeklyChartType === 'bar') {
+                       return (
+                         <Bar 
+                           key={s.key} 
+                           dataKey={s.key} 
+                           name={s.label} 
+                           fill={s.colorHex} 
+                           radius={[4, 4, 0, 0]}
+                           label={labelConfig}
+                         />
+                       );
+                     } else if (weeklyChartType === 'area') {
+                       return (
+                         <Area 
+                           key={s.key} 
+                           type="monotone"
+                           dataKey={s.key} 
+                           name={s.label} 
+                           stroke={s.colorHex} 
+                           fill={s.colorHex} 
+                           fillOpacity={0.15}
+                           strokeWidth={2}
+                           label={labelConfig}
+                         />
+                       );
+                     } else {
+                       return (
+                         <Line 
+                           key={s.key} 
+                           type="monotone" 
+                           dataKey={s.key} 
+                           name={s.label} 
+                           stroke={s.colorHex} 
+                           strokeWidth={3} 
+                           dot={{ r: 4, strokeWidth: 1 }}
+                           label={labelConfig}
+                         />
+                       );
+                     }
+                   })}
                 </ComposedChart>
               </div>
 
@@ -2087,49 +2596,96 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
 
           {/* Rolling window detail */}
           <div className="mb-8 page-break-before">
-            <h2 className={`text-lg font-bold mb-3 print:text-black ${dark ? 'text-white' : 'text-slate-800'}`}>Rolling {weeklyReportData.windowSize}-Week Active Window Details</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-              {weeklyReportData.activeWindow.map((week) => {
-                const isSelectedWeek = week.date === targetDate;
-                return (
-                  <div key={week.label} className={`rounded-xl border p-4 ${isSelectedWeek ? 'border-violet-500 bg-violet-500/5' : 'border-slate-200'}`}>
-                    <p className="text-xs font-bold text-slate-500 mb-1">{week.label} {isSelectedWeek && '(Target)'}</p>
-                    <p className="text-xs font-mono font-semibold mb-2">{new Date(week.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
-                    <div className="space-y-1">
-                      {metricsList.map(m => {
-                        const colName = m.key;
-                        const val = Number(week.rawRow[colName]) || 0;
-                        return (
-                          <div key={m.key} className="flex justify-between text-xs">
-                            <span className="text-slate-400">{m.label.replace('Current ', '')}</span>
-                            <span className="font-semibold text-slate-700">{val.toLocaleString()}</span>
-                          </div>
-                        );
-                      })}
+            <h2 className={`text-lg font-bold mb-3 print:text-black ${dark ? 'text-white' : 'text-slate-800'}`}>
+              {weeklyReportData.isComparison ? 'Organization Rolling Window Performance Profiles' : `Rolling ${weeklyReportData.windowSize}-Week Active Window Details`}
+            </h2>
+            {weeklyReportData.isComparison ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {weeklyReportData.orgWindowSummaries.map(summary => {
+                  const org = summary.org;
+                  const firstRow = summary.windowRows[0] || {};
+                  const regionKey = Object.keys(firstRow).find(k => k.toLowerCase().includes('region')) || 'Region';
+                  const cohortKey = Object.keys(firstRow).find(k => k.toLowerCase().includes('cohort')) || 'Cohort';
+                  const region = firstRow[regionKey] || '—';
+                  const cohort = firstRow[cohortKey] || '—';
+
+                  return (
+                    <div key={org} className={`rounded-xl border p-4 ${dark ? 'bg-slate-800/40 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
+                      <h3 className={`font-bold ${dark ? 'text-white' : 'text-slate-800'}`}>{org}</h3>
+                      <p className={`text-[10px] uppercase font-semibold ${dark ? 'text-slate-500' : 'text-slate-400'} mb-3`}>
+                        Region: {region} · Cohort: {cohort}
+                      </p>
+                      <div className="space-y-2">
+                        {selectedWeeklyMetrics.map(metric => {
+                          const val = Number(summary.latestRow[metric]) || 0;
+                          const vals = summary.windowRows.map(r => Number(r[metric]) || 0);
+                          const sum = vals.reduce((a, b) => a + b, 0);
+                          const avg = vals.length > 0 ? sum / vals.length : 0;
+                          
+                          return (
+                            <div key={metric} className="text-xs">
+                              <div className="flex justify-between font-semibold">
+                                <span className={dark ? 'text-slate-400' : 'text-slate-500'}>{metric}</span>
+                                <span className={dark ? 'text-slate-200' : 'text-slate-800'}>{val.toLocaleString()}</span>
+                              </div>
+                              <div className="flex justify-between text-[10px] text-slate-500/80">
+                                <span>Rolling Avg ({weeklyReportData.windowSize}W)</span>
+                                <span>{avg.toFixed(1)}</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                {weeklyReportData.activeWindow.map((week) => {
+                  const isSelectedWeek = week.date === targetDate;
+                  return (
+                    <div key={week.label} className={`rounded-xl border p-4 ${isSelectedWeek ? 'border-violet-500 bg-violet-500/5' : 'border-slate-200'}`}>
+                      <p className="text-xs font-bold text-slate-500 mb-1">{week.label} {isSelectedWeek && '(Target)'}</p>
+                      <p className="text-xs font-mono font-semibold mb-2">{new Date(week.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
+                      <div className="space-y-1">
+                        {metricsList.map(m => {
+                          const colName = m.key;
+                          const val = Number(week.rawRow[colName]) || 0;
+                          return (
+                            <div key={m.key} className="flex justify-between text-xs">
+                              <span className="text-slate-400">{m.label.replace('Current ', '')}</span>
+                              <span className="font-semibold text-slate-700">{val.toLocaleString()}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Transition details */}
-          <div className="mb-8">
-            <h2 className={`text-lg font-bold mb-3 print:text-black ${dark ? 'text-white' : 'text-slate-800'}`}>Rolling Window Transition</h2>
-            <div className={`rounded-xl p-4 border text-sm ${dark ? 'bg-slate-800/10 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
-              <p className={dark ? 'text-slate-400' : 'text-slate-600'}>
-                To compute the rolling {weeklyReportData.windowSize === 12 ? 'Quarter' : 'Monthly Active Users (MAU)'} as of <span className="font-semibold font-mono">{targetDate}</span>:
-              </p>
-              <ul className={`list-disc pl-5 mt-2 space-y-1 text-xs ${dark ? 'text-slate-500' : 'text-slate-500'}`}>
-                {weeklyReportData.droppedWeekDate ? (
-                  <li>Oldest week <span className="text-red-500 font-semibold font-mono">{weeklyReportData.droppedWeekDate}</span> was dropped.</li>
-                ) : (
-                  <li>Initial database setup phase: no week dropped yet.</li>
-                )}
-                <li>New week <span className="text-emerald-500 font-semibold font-mono">{targetDate}</span> was added.</li>
-              </ul>
+          {!weeklyReportData.isComparison && (
+            <div className="mb-8">
+              <h2 className={`text-lg font-bold mb-3 print:text-black ${dark ? 'text-white' : 'text-slate-800'}`}>Rolling Window Transition</h2>
+              <div className={`rounded-xl p-4 border text-sm ${dark ? 'bg-slate-800/10 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
+                <p className={dark ? 'text-slate-400' : 'text-slate-600'}>
+                  To compute the rolling {weeklyReportData.windowSize === 12 ? 'Quarter' : 'Monthly Active Users (MAU)'} as of <span className="font-semibold font-mono">{targetDate}</span>:
+                </p>
+                <ul className={`list-disc pl-5 mt-2 space-y-1 text-xs ${dark ? 'text-slate-500' : 'text-slate-500'}`}>
+                  {weeklyReportData.droppedWeekDate ? (
+                    <li>Oldest week <span className="text-red-500 font-semibold font-mono">{weeklyReportData.droppedWeekDate}</span> was dropped.</li>
+                  ) : (
+                    <li>Initial database setup phase: no week dropped yet.</li>
+                  )}
+                  <li>New week <span className="text-emerald-500 font-semibold font-mono">{targetDate}</span> was added.</li>
+                </ul>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className={`text-center pt-8 border-t mt-12 print:mt-6 print:border-slate-200 ${dark ? 'border-slate-700 text-slate-500' : 'border-slate-200 text-slate-400'}`}>
             <p className="text-sm print:text-slate-500">Generated by <span className="font-semibold text-blue-400 print:text-blue-600">InsightForge</span></p>
@@ -2145,7 +2701,7 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
    ═══════════════════════════════════════════ */
 
 export default function App() {
-  const [dark, setDark] = useState(false);
+  const dark = false;
 
   // CSV state
   const [csvData, setCsvData] = useState(null);
@@ -2158,7 +2714,7 @@ export default function App() {
 
   // Weekly Report state
   const [viewMode, setViewMode] = useState('weekly');
-  const [selectedOrg, setSelectedOrg] = useState('');
+  const [selectedOrg, setSelectedOrg] = useState([]);
   const [selectedWeeklyStartDate, setSelectedWeeklyStartDate] = useState('');
   const [selectedWeeklyEndDate, setSelectedWeeklyEndDate] = useState('');
   const [selectedWeeklyMetrics, setSelectedWeeklyMetrics] = useState([]);
@@ -2181,6 +2737,11 @@ export default function App() {
   const [brushStartIndex, setBrushStartIndex] = useState(0);
   const [brushEndIndex, setBrushEndIndex] = useState(24);
 
+  // Custom Chart Builder date range & organization selector
+  const [selectedCustomOrg, setSelectedCustomOrg] = useState([]);
+  const [selectedCustomStartDate, setSelectedCustomStartDate] = useState('');
+  const [selectedCustomEndDate, setSelectedCustomEndDate] = useState('');
+
   // Report queue
   const [savedCharts, setSavedCharts] = useState([]);
   const [showReport, setShowReport] = useState(false);
@@ -2191,9 +2752,31 @@ export default function App() {
   const fileInputRef = useRef(null);
 
   // ── Processed data calculation ──
+  // ── Chart configuration memo ──
+  /* CUSTOM_CHART_BUILDER_START
+  const currentConfig = useMemo(() => ({ 
+    xAxis, 
+    yAxis, 
+    chartType, 
+    palette, 
+    showTrendline, 
+    legendLabels, 
+    filterZeros, 
+    topN, 
+    logScale, 
+    aggregation, 
+    bubbleField,
+    brushStartIndex,
+    brushEndIndex,
+    startDate: selectedCustomStartDate,
+    endDate: selectedCustomEndDate,
+    orgName: selectedCustomOrg
+  }), [xAxis, yAxis, chartType, palette, showTrendline, legendLabels, filterZeros, topN, logScale, aggregation, bubbleField, brushStartIndex, brushEndIndex, selectedCustomStartDate, selectedCustomEndDate, selectedCustomOrg]);
+
+  // ── Processed data calculation ──
   const processedData = useMemo(() => {
-    return processChartData(csvData, { xAxis, yAxis, chartType, filterZeros, topN, aggregation, bubbleField }, fieldMeta);
-  }, [csvData, xAxis, yAxis, chartType, filterZeros, topN, aggregation, bubbleField, fieldMeta]);
+    return processChartData(csvData, currentConfig, fieldMeta);
+  }, [csvData, currentConfig, fieldMeta]);
 
   // ── Auto reset brush indices when data changes ──
   useEffect(() => {
@@ -2210,6 +2793,7 @@ export default function App() {
     }
     return processedData;
   }, [processedData, brushStartIndex, brushEndIndex, chartType]);
+  CUSTOM_CHART_BUILDER_END */
 
   // Extract unique organizations from loaded CSV
   const uniqueOrgs = useMemo(() => {
@@ -2219,116 +2803,218 @@ export default function App() {
     return Array.from(new Set(csvData.map(r => String(r[orgCol])).filter(Boolean))).sort();
   }, [csvData]);
 
-  // Extract unique dates specifically for the selected organization
+  // Extract unique dates specifically for the selected organization(s)
   const uniqueOrgDates = useMemo(() => {
-    if (!csvData || csvData.length === 0 || !selectedOrg) return [];
+    if (!csvData || csvData.length === 0 || !selectedOrg || selectedOrg.length === 0) return [];
     const orgCol = getOrgNameColumn(csvData[0]);
     const dateCol = getAsOfDateColumn(csvData[0]);
     if (!orgCol || !dateCol) return [];
     return Array.from(new Set(
       csvData
-        .filter(r => String(r[orgCol]) === selectedOrg)
-        .map(r => String(r[dateCol]))
+        .filter(r => selectedOrg.includes(String(r[orgCol]).trim()))
+        .map(r => String(r[dateCol]).trim())
         .filter(Boolean)
-    )).sort((a, b) => new Date(a) - new Date(b));
+    )).sort((a, b) => safeParseDate(a) - safeParseDate(b));
   }, [csvData, selectedOrg]);
 
-  // Extract unique dates globally from loaded CSV
+  // Extract unique dates globally or for the selected custom organization(s)
+  /* CUSTOM_CHART_BUILDER_START
   const uniqueDates = useMemo(() => {
     if (!csvData || csvData.length === 0) return [];
     const dateCol = getAsOfDateColumn(csvData[0]);
     if (!dateCol) return [];
-    return Array.from(new Set(csvData.map(r => String(r[dateCol])).filter(Boolean))).sort((a, b) => new Date(a) - new Date(b));
-  }, [csvData]);
+    
+    let filteredData = csvData;
+    const orgCol = getOrgNameColumn(csvData[0]);
+    if (orgCol && selectedCustomOrg && selectedCustomOrg.length > 0) {
+      filteredData = csvData.filter(r => selectedCustomOrg.includes(String(r[orgCol]).trim()));
+    }
+
+    return Array.from(new Set(filteredData.map(r => String(r[dateCol]).trim()).filter(Boolean)))
+      .sort((a, b) => safeParseDate(a) - safeParseDate(b));
+  }, [csvData, selectedCustomOrg]);
+  CUSTOM_CHART_BUILDER_END */
 
   // Auto-select first organization on file load
   useEffect(() => {
-    if (uniqueOrgs.length > 0 && (!selectedOrg || !uniqueOrgs.includes(selectedOrg))) {
-      setSelectedOrg(uniqueOrgs[0]);
+    if (uniqueOrgs.length > 0 && (selectedOrg.length === 0 || !selectedOrg.every(o => uniqueOrgs.includes(o)))) {
+      setSelectedOrg([uniqueOrgs[0]]);
     }
   }, [uniqueOrgs, selectedOrg]);
 
   // Auto-select date range on organization load
   useEffect(() => {
     if (uniqueOrgDates.length > 0) {
-      setSelectedWeeklyStartDate(uniqueOrgDates[0]);
-      if (weeklyHistoryLimit === 'mau') {
-        const targetEndIdx = Math.min(uniqueOrgDates.length - 1, 3);
-        setSelectedWeeklyEndDate(uniqueOrgDates[targetEndIdx]);
-      } else {
-        setSelectedWeeklyEndDate(uniqueOrgDates[uniqueOrgDates.length - 1]);
+      if (!selectedWeeklyStartDate || !uniqueOrgDates.includes(selectedWeeklyStartDate) || !selectedWeeklyEndDate || !uniqueOrgDates.includes(selectedWeeklyEndDate)) {
+        setSelectedWeeklyStartDate(uniqueOrgDates[0]);
+        if (weeklyHistoryLimit === 'mau') {
+          const targetEndIdx = Math.min(uniqueOrgDates.length - 1, 3);
+          setSelectedWeeklyEndDate(uniqueOrgDates[targetEndIdx]);
+        } else if (weeklyHistoryLimit === 'quarter') {
+          const targetEndIdx = Math.min(uniqueOrgDates.length - 1, 11);
+          setSelectedWeeklyEndDate(uniqueOrgDates[targetEndIdx]);
+        } else {
+          setSelectedWeeklyEndDate(uniqueOrgDates[uniqueOrgDates.length - 1]);
+        }
       }
     } else {
       setSelectedWeeklyStartDate('');
       setSelectedWeeklyEndDate('');
     }
-  }, [uniqueOrgDates, weeklyHistoryLimit]);
+  }, [uniqueOrgDates]);
+
+  // Auto-select date range for Custom Chart Builder on load
+  /* CUSTOM_CHART_BUILDER_START
+  useEffect(() => {
+    if (uniqueDates.length > 0) {
+      setSelectedCustomStartDate(uniqueDates[0]);
+      setSelectedCustomEndDate(uniqueDates[uniqueDates.length - 1]);
+    } else {
+      setSelectedCustomStartDate('');
+      setSelectedCustomEndDate('');
+    }
+  }, [uniqueDates]);
+  CUSTOM_CHART_BUILDER_END */
 
 
 
   // Weekly report data processing
   const weeklyReportData = useMemo(() => {
-    if (!csvData || csvData.length === 0 || !selectedOrg || !selectedWeeklyStartDate || !selectedWeeklyEndDate) return null;
+    if (!csvData || csvData.length === 0 || !selectedOrg || selectedOrg.length === 0 || !selectedWeeklyStartDate || !selectedWeeklyEndDate) return null;
     
     const orgCol = getOrgNameColumn(csvData[0]);
     const dateCol = getAsOfDateColumn(csvData[0]);
     if (!orgCol || !dateCol) return null;
 
-    // Filter and sort chronological data for selected organization
-    const orgRows = csvData
-      .filter(r => String(r[orgCol]) === selectedOrg)
-      .sort((a, b) => new Date(a[dateCol]) - new Date(b[dateCol]));
+    const isComparison = selectedOrg.length > 1;
 
-    if (orgRows.length === 0) return null;
+    if (isComparison) {
+      // Find all unique dates across selected orgs in chronological order
+      const allDates = Array.from(new Set(
+        csvData
+          .filter(r => selectedOrg.includes(String(r[orgCol]).trim()))
+          .map(r => String(r[dateCol]).trim())
+          .filter(Boolean)
+      )).sort((a, b) => safeParseDate(a) - safeParseDate(b));
 
-    // Find the indices of the selected start and end dates
-    const startIdx = orgRows.findIndex(r => String(r[dateCol]) === selectedWeeklyStartDate);
-    const endIdx = orgRows.findIndex(r => String(r[dateCol]) === selectedWeeklyEndDate);
-    if (startIdx === -1 || endIdx === -1) return null;
+      const startIdx = allDates.indexOf(selectedWeeklyStartDate);
+      const endIdx = allDates.indexOf(selectedWeeklyEndDate);
+      if (startIdx === -1 || endIdx === -1) return null;
 
-    const chronologicalSlice = orgRows.slice(Math.min(startIdx, endIdx), Math.max(startIdx, endIdx) + 1);
-    const historyRows = chronologicalSlice;
+      const rangeDates = allDates.slice(Math.min(startIdx, endIdx), Math.max(startIdx, endIdx) + 1);
 
-    // Rolling window details (MAU = 4 weeks, Quarter = 12 weeks)
-    const targetIdx = Math.max(startIdx, endIdx);
-    const windowSize = weeklyHistoryLimit === 'quarter' ? 12 : 4;
-    const windowStartIdx = Math.max(0, targetIdx - windowSize + 1);
-    const windowRows = orgRows.slice(windowStartIdx, targetIdx + 1);
-    
-    // Map active window rows with W1, W2, etc. labels
-    const activeWindow = windowRows.map((row, i, arr) => {
-      const weekNum = windowSize - (arr.length - 1 - i);
+      // Build historyRows for chart (with W1, W2... labels for X-axis)
+      const historyRows = rangeDates.map((date, i) => {
+        const row = { [dateCol]: date, __weekLabel: `W${i + 1}` };
+        selectedOrg.forEach(org => {
+          const orgRow = csvData.find(r => String(r[orgCol]).trim() === org && String(r[dateCol]).trim() === date);
+          selectedWeeklyMetrics.forEach(metric => {
+            row[`${org} - ${metric}`] = orgRow ? (Number(orgRow[metric]) || 0) : 0;
+          });
+        });
+        return row;
+      });
+      const totalWeeks = historyRows.length;
+
+      // Target index and rolling window sizes
+      const targetIdx = Math.max(startIdx, endIdx);
+      const windowSize = weeklyHistoryLimit === 'custom' ? (Math.abs(endIdx - startIdx) + 1) : (weeklyHistoryLimit === 'quarter' ? 12 : 4);
+      const windowStartIdx = weeklyHistoryLimit === 'custom' ? Math.min(startIdx, endIdx) : Math.max(0, targetIdx - windowSize + 1);
+      const windowDates = allDates.slice(windowStartIdx, targetIdx + 1);
+
+      // Group rolling window summaries per organization
+      const orgWindowSummaries = selectedOrg.map(org => {
+        const orgAllRows = csvData.filter(r => String(r[orgCol]).trim() === org);
+        const windowRows = windowDates.map(date => {
+          return orgAllRows.find(r => String(r[dateCol]).trim() === date) || {};
+        });
+        return {
+          org,
+          windowRows,
+          latestRow: windowRows[windowRows.length - 1] || {}
+        };
+      });
+
+      const targetDate = selectedWeeklyEndDate;
+      const prevDate = targetIdx > 0 ? allDates[targetIdx - 1] : null;
+
       return {
-        label: `W${weekNum}`,
-        date: row[dateCol],
-        rawRow: row
+        isComparison: true,
+        orgCol,
+        dateCol,
+        selectedOrgs: selectedOrg,
+        selectedIdx: targetIdx,
+        historyRows,
+        totalWeeks,
+        orgWindowSummaries,
+        targetDate,
+        prevDate,
+        windowSize
       };
-    });
+    } else {
+      // Single org behavior (identical to original, adapted for selectedOrg[0])
+      const activeOrg = selectedOrg[0];
+      const orgRows = csvData
+        .filter(r => String(r[orgCol]).trim() === activeOrg.trim())
+        .sort((a, b) => safeParseDate(a[dateCol]) - safeParseDate(b[dateCol]));
 
-    // Dropped vs Added transition details
-    const droppedWeekRow = targetIdx >= windowSize ? orgRows[targetIdx - windowSize] : null;
-    const droppedWeekDate = droppedWeekRow ? droppedWeekRow[dateCol] : null;
-    const addedWeekDate = selectedWeeklyEndDate;
+      if (orgRows.length === 0) return null;
 
-    return {
-      orgCol,
-      dateCol,
-      orgRows,
-      selectedIdx: targetIdx,
-      historyRows,
-      activeWindow,
-      droppedWeekRow,
-      droppedWeekDate,
-      addedWeekDate,
-      windowSize
-    };
-  }, [csvData, selectedOrg, selectedWeeklyStartDate, selectedWeeklyEndDate, weeklyHistoryLimit]);
+      // Find the indices of the selected start and end dates
+      const startIdx = orgRows.findIndex(r => String(r[dateCol]).trim() === selectedWeeklyStartDate.trim());
+      const endIdx = orgRows.findIndex(r => String(r[dateCol]).trim() === selectedWeeklyEndDate.trim());
+      if (startIdx === -1 || endIdx === -1) return null;
+
+      const chronologicalSlice = orgRows.slice(Math.min(startIdx, endIdx), Math.max(startIdx, endIdx) + 1);
+      // Add __weekLabel (W1, W2, ...) to each row for clean X-axis
+      const historyRows = chronologicalSlice.map((row, i) => ({ ...row, __weekLabel: `W${i + 1}` }));
+      const totalWeeks = historyRows.length;
+
+      // Rolling window details (MAU = 4 weeks, Quarter = 12 weeks, Custom = selected weeks)
+      const targetIdx = Math.max(startIdx, endIdx);
+      const windowSize = weeklyHistoryLimit === 'custom' ? (Math.abs(endIdx - startIdx) + 1) : (weeklyHistoryLimit === 'quarter' ? 12 : 4);
+      const windowStartIdx = weeklyHistoryLimit === 'custom' ? Math.min(startIdx, endIdx) : Math.max(0, targetIdx - windowSize + 1);
+      const windowRows = orgRows.slice(windowStartIdx, targetIdx + 1);
+      
+      // Map active window rows with W1, W2, etc. labels
+      const activeWindow = windowRows.map((row, i, arr) => {
+        const weekNum = windowSize - (arr.length - 1 - i);
+        return {
+          label: `W${weekNum}`,
+          date: row[dateCol],
+          rawRow: row
+        };
+      });
+
+      // Dropped vs Added transition details
+      const droppedWeekRow = targetIdx >= windowSize ? orgRows[targetIdx - windowSize] : null;
+      const droppedWeekDate = droppedWeekRow ? droppedWeekRow[dateCol] : null;
+      const addedWeekDate = selectedWeeklyEndDate;
+
+      return {
+        isComparison: false,
+        orgCol,
+        dateCol,
+        orgRows,
+        selectedIdx: targetIdx,
+        historyRows,
+        totalWeeks,
+        activeWindow,
+        droppedWeekRow,
+        droppedWeekDate,
+        addedWeekDate,
+        windowSize
+      };
+    }
+  }, [csvData, selectedOrg, selectedWeeklyStartDate, selectedWeeklyEndDate, weeklyHistoryLimit, selectedWeeklyMetrics]);
 
   // ── Smart recommendations ──
+  /* CUSTOM_CHART_BUILDER_START
   const recommendations = useMemo(() => {
     if (!csvData || !xAxis || yAxis.length === 0) return [];
     return getChartRecommendations(xAxis, yAxis, fieldMeta, csvData, columns);
   }, [csvData, xAxis, yAxis, fieldMeta, columns]);
+  CUSTOM_CHART_BUILDER_END */
 
   // ── Load parsed data into state ──
   const loadData = useCallback((data, name) => {
@@ -2477,22 +3163,75 @@ export default function App() {
   }, [chartType]);
 
   const sameAxisWarning = xAxis && yAxis.includes(xAxis);
-  const previewInsight = showPreview && visibleData.length > 0 ? generateInsight(yAxis, visibleData) : '';
-  const currentConfig = { 
-    xAxis, 
-    yAxis, 
-    chartType, 
-    palette, 
-    showTrendline, 
-    legendLabels, 
-    filterZeros, 
-    topN, 
-    logScale, 
-    aggregation, 
-    bubbleField,
-    brushStartIndex,
-    brushEndIndex
-  };
+
+  /* CUSTOM_CHART_BUILDER_START
+  const customChartYKeys = useMemo(() => {
+    if (selectedCustomOrg && selectedCustomOrg.length > 1) {
+      const pivoted = [];
+      selectedCustomOrg.forEach(org => {
+        yAxis.forEach(col => {
+          pivoted.push(`${org} - ${col}`);
+        });
+      });
+      return pivoted;
+    }
+    return yAxis;
+  }, [selectedCustomOrg, yAxis]);
+
+  const previewInsight = showPreview && visibleData.length > 0 ? generateInsight(customChartYKeys, visibleData) : '';
+
+  const comparisonStats = useMemo(() => {
+    if (viewMode !== 'custom' || !selectedCustomOrg || selectedCustomOrg.length <= 1 || !csvData || csvData.length === 0) {
+      return [];
+    }
+
+    const orgCol = getOrgNameColumn(csvData[0]);
+    const dateCol = getAsOfDateColumn(csvData[0]);
+    if (!orgCol) return [];
+
+    // Filter csvData by selectedCustomOrg and date limits
+    let filtered = csvData;
+    const orgsSet = new Set(selectedCustomOrg.map(o => String(o).trim()));
+    filtered = filtered.filter(row => orgsSet.has(String(row[orgCol]).trim()));
+
+    if (dateCol && selectedCustomStartDate) {
+      const startTs = safeParseDate(selectedCustomStartDate);
+      filtered = filtered.filter(row => safeParseDate(row[dateCol]) >= startTs);
+    }
+    if (dateCol && selectedCustomEndDate) {
+      const endTs = safeParseDate(selectedCustomEndDate);
+      filtered = filtered.filter(row => safeParseDate(row[dateCol]) <= endTs);
+    }
+
+    // Calculate sum, count, avg, max for each org and each selected Y-Axis metric
+    return yAxis.map(metric => {
+      const orgStats = selectedCustomOrg.map(orgName => {
+        const orgRows = filtered.filter(row => String(row[orgCol]).trim() === String(orgName).trim());
+        const values = orgRows.map(row => Number(row[metric])).filter(val => !isNaN(val) && val !== null);
+        
+        const sum = values.reduce((s, v) => s + v, 0);
+        const count = values.length;
+        const avg = count > 0 ? sum / count : 0;
+        const max = count > 0 ? Math.max(...values) : 0;
+        const min = count > 0 ? Math.min(...values) : 0;
+
+        return {
+          orgName,
+          sum,
+          count,
+          avg,
+          max,
+          min
+        };
+      });
+
+      return {
+        metric,
+        orgStats
+      };
+    });
+  }, [viewMode, selectedCustomOrg, csvData, yAxis, selectedCustomStartDate, selectedCustomEndDate]);
+  CUSTOM_CHART_BUILDER_END */
 
   // Numeric columns for bubble field selection
   const numericColumns = useMemo(() => columns.filter(c => fieldMeta[c] === 'numeric' || fieldMeta[c] === 'ratio'), [columns, fieldMeta]);
@@ -2508,7 +3247,9 @@ export default function App() {
   return (
     <div className={`h-screen flex flex-col ${bg} transition-colors duration-300 font-sans`}>
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+      {/* CUSTOM_CHART_BUILDER_START — ReportModal (uncomment to re-enable)
       {showReport && <ReportModal charts={savedCharts} data={csvData} fieldMeta={fieldMeta} onClose={() => setShowReport(false)} dark={dark} />}
+      CUSTOM_CHART_BUILDER_END */}
       {showWeeklyReport && (
         <WeeklyReportModal 
           orgName={selectedOrg}
@@ -2518,62 +3259,59 @@ export default function App() {
           weeklyChartType={weeklyChartType}
           onClose={() => setShowWeeklyReport(false)}
           dark={dark} 
+          data={csvData}
         />
       )}
 
       {/* ═══════ HEADER ═══════ */}
-      <header className={`no-print h-16 flex items-center justify-between px-6 border-b flex-shrink-0 ${panelBg} ${panelBorder} backdrop-blur-sm z-30`}
-        style={{ borderColor: dark ? '#1e293b' : '#e2e8f0' }}>
+      <header className="no-print h-16 flex items-center justify-between px-6 border-b flex-shrink-0 bg-slate-900 border-slate-800 backdrop-blur-sm z-30"
+        style={{ borderColor: '#1e293b' }}>
         <div className="flex items-center gap-3">
-          <button onClick={() => setSidebarOpen(!sidebarOpen)} className={`lg:hidden p-1.5 rounded-lg ${dark ? 'text-slate-400 hover:bg-slate-700' : 'text-slate-500 hover:bg-slate-100'}`}>
+          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="lg:hidden p-1.5 rounded-lg text-slate-400 hover:bg-slate-800">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h18M3 6h18M3 18h18" /></svg>
           </button>
           <LogoIcon />
           <div>
-            <h1 className={`text-lg font-extrabold leading-tight ${textPrimary}`}>InsightForge</h1>
-            <p className={`text-[10px] tracking-wide uppercase ${textMuted}`}>Turn your data into stories</p>
+            <h1 className="text-sm sm:text-lg font-extrabold leading-tight text-white">InsightForge</h1>
+            <p className="text-[10px] tracking-wide uppercase text-slate-400 hidden sm:block">Turn your data into stories</p>
           </div>
         </div>
 
+        {/* CUSTOM_CHART_BUILDER_START — Nav tab switcher (uncomment to re-enable custom chart tab)
         {csvData && (
-          <div className="hidden md:flex gap-1 bg-slate-200/40 dark:bg-slate-700/40 p-1 rounded-xl border border-slate-300/10 backdrop-blur-md">
-            {/* Preserved for future changes:
+          <div className="hidden md:flex gap-1 bg-slate-800/60 p-1 rounded-xl border border-slate-700/50 backdrop-blur-md">
             <button
               onClick={() => setViewMode('custom')}
               className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
                 viewMode === 'custom'
                   ? 'bg-blue-600 text-white shadow-md shadow-blue-600/15 scale-[1.02]'
-                  : `${dark ? 'text-slate-300 hover:bg-slate-700/50 hover:text-white' : 'text-slate-600 hover:bg-slate-200/50 hover:text-slate-800'}`
+                  : 'text-slate-300 hover:bg-slate-800/50 hover:text-white'
               }`}
             >
               🎨 Custom Chart Builder
             </button>
-            */}
             <button
               onClick={() => setViewMode('weekly')}
               className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${
                 viewMode === 'weekly'
                   ? 'bg-violet-600 text-white shadow-md shadow-violet-600/15 scale-[1.02]'
-                  : `${dark ? 'text-slate-300 hover:bg-slate-700/50 hover:text-white' : 'text-slate-600 hover:bg-slate-200/50 hover:text-slate-800'}`
+                  : 'text-slate-300 hover:bg-slate-800/50 hover:text-white'
               }`}
             >
               ⚡ Weekly Org Report
             </button>
           </div>
         )}
+        CUSTOM_CHART_BUILDER_END */}
 
-        <div className="flex items-center gap-3">
-          <button onClick={() => setDark(!dark)} className={`p-2 rounded-lg transition-all duration-300 ${dark ? 'bg-slate-700/80 text-amber-400 hover:bg-slate-600' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}
-            title={dark ? 'Switch to light mode' : 'Switch to dark mode'}>
-            {dark ? <SunIcon /> : <MoonIcon />}
-          </button>
+        <div className="flex items-center gap-1.5 sm:gap-3">
           <button 
-            onClick={() => viewMode === 'custom' ? setShowReport(true) : setShowWeeklyReport(true)} 
-            disabled={viewMode === 'custom' ? savedCharts.length === 0 : !weeklyReportData}
-            className={`px-5 py-2 rounded-lg text-sm font-bold transition-all duration-300 ${
-              (viewMode === 'custom' ? savedCharts.length === 0 : !weeklyReportData)
-                ? (dark ? 'bg-slate-700 text-slate-500 cursor-not-allowed' : 'bg-slate-200 text-slate-400 cursor-not-allowed')
-                : `bg-blue-600 text-white hover:bg-blue-500 shadow-lg shadow-blue-600/25`
+            onClick={() => setShowWeeklyReport(true)} 
+            disabled={!weeklyReportData}
+            className={`px-3 py-1.5 sm:px-5 sm:py-2 rounded-lg text-xs sm:text-sm font-bold transition-all duration-300 ${
+              !weeklyReportData
+                ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                : 'bg-blue-600 text-white hover:bg-blue-500 shadow-lg shadow-blue-600/25'
             }`}>
             📊 Generate Report
           </button>
@@ -2583,56 +3321,62 @@ export default function App() {
       {/* ═══════ BODY ═══════ */}
       <div className="flex flex-1 overflow-hidden no-print">
         {/* ═══ LEFT SIDEBAR ═══ */}
-        <aside className={`${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 fixed lg:static inset-y-16 left-0 z-20 w-[300px] flex-shrink-0 overflow-y-auto border-r transition-transform duration-300 ${panelBg} ${panelBorder}`}
-          style={{ borderColor: dark ? '#1e293b' : '#e2e8f0' }}>
+        <aside className={`${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 fixed lg:static inset-y-16 left-0 z-20 w-[300px] flex-shrink-0 overflow-y-auto border-r border-slate-800 transition-transform duration-300 bg-slate-900`}
+          style={{ borderColor: '#1e293b' }}>
           {sidebarOpen && <div className="lg:hidden fixed inset-0 bg-black/50 -z-10" onClick={() => setSidebarOpen(false)} />}
+
+          {/* Mobile sidebar close bar */}
+          <div className="lg:hidden flex items-center justify-between p-4 border-b border-slate-800">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Configuration</span>
+            <button onClick={() => setSidebarOpen(false)} className="p-1.5 rounded-lg text-sm font-semibold transition-colors text-slate-400 hover:bg-slate-800">✕ Close</button>
+          </div>
 
           <div className="p-5 space-y-6">
             {/* ── Step 1: Upload ── */}
             <div>
-              <h3 className={`text-xs font-bold uppercase tracking-widest mb-3 ${textMuted}`}>
+              <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-slate-400">
                 <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] mr-2">1</span>
                 Upload Data
               </h3>
               {!csvData ? (
                 <div onDrop={handleDrop} onDragOver={e => e.preventDefault()} onClick={() => fileInputRef.current?.click()}
-                  className={`rounded-xl border-2 border-dashed p-6 text-center cursor-pointer transition-all duration-300 group ${dark ? 'border-slate-600 hover:border-blue-500/50 hover:bg-blue-500/5' : 'border-slate-300 hover:border-blue-400 hover:bg-blue-50/50'}`}>
+                  className="rounded-xl border-2 border-dashed p-6 text-center cursor-pointer transition-all duration-300 group border-slate-700 hover:border-blue-500/50 hover:bg-blue-500/5">
                   <UploadIcon />
-                  <p className={`text-sm font-medium mb-1 ${dark ? 'text-slate-300' : 'text-slate-600'}`}>Drag & drop CSV or Excel file</p>
-                  <p className={`text-xs ${textMuted}`}>.csv, .xlsx, .xls — click to browse</p>
+                  <p className="text-sm font-medium mb-1 text-slate-200">Drag & drop CSV or Excel file</p>
+                  <p className="text-xs text-slate-400">.csv, .xlsx, .xls — click to browse</p>
                   <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleFileUpload} className="hidden" />
                 </div>
               ) : (
-                <div className={`rounded-xl border p-4 ${dark ? 'border-slate-600/50 bg-slate-700/30' : 'border-slate-200 bg-slate-50'}`}>
+                <div className="rounded-xl border p-4 border-slate-800 bg-slate-800/40">
                   <div className="flex items-center gap-2 mb-3">
                     <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                    <span className={`text-sm font-semibold truncate ${textPrimary}`}>{fileName}</span>
+                    <span className="text-sm font-semibold truncate text-slate-200">{fileName}</span>
                   </div>
-                  <p className={`text-xs mb-3 ${textMuted}`}>{rowCount} rows · {columns.length} columns</p>
-                  <div className="overflow-x-auto rounded-lg border" style={{ borderColor: dark ? '#334155' : '#e2e8f0' }}>
+                  <p className="text-xs mb-3 text-slate-400">{rowCount} rows · {columns.length} columns</p>
+                  <div className="overflow-x-auto rounded-lg border border-slate-800">
                     <table className="w-full text-[10px]">
                       <thead>
-                        <tr className={dark ? 'bg-slate-700/80' : 'bg-slate-100'}>
+                        <tr className="bg-slate-800/80">
                           {columns.slice(0, 4).map(c => (
-                            <th key={c} className={`px-2 py-1.5 text-left font-semibold font-mono-data truncate max-w-[70px] ${dark ? 'text-slate-300' : 'text-slate-600'}`}>{c}</th>
+                            <th key={c} className="px-2 py-1.5 text-left font-semibold font-mono-data truncate max-w-[70px] text-slate-300">{c}</th>
                           ))}
-                          {columns.length > 4 && <th className={`px-2 py-1.5 ${textMuted}`}>+{columns.length - 4}</th>}
+                          {columns.length > 4 && <th className="px-2 py-1.5 text-slate-500">+{columns.length - 4}</th>}
                         </tr>
                       </thead>
                       <tbody>
                         {previewRows.map((row, i) => (
-                          <tr key={i} className={`border-t ${dark ? 'border-slate-700' : 'border-slate-200'}`}>
+                          <tr key={i} className="border-t border-slate-800/60">
                             {columns.slice(0, 4).map(c => (
-                              <td key={c} className={`px-2 py-1 font-mono-data truncate max-w-[70px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>{row[c] != null ? String(row[c]) : '—'}</td>
+                              <td key={c} className="px-2 py-1 font-mono-data truncate max-w-[70px] text-slate-400">{row[c] != null ? String(row[c]) : '—'}</td>
                             ))}
-                            {columns.length > 4 && <td className={`px-2 py-1 ${textMuted}`}>…</td>}
+                            {columns.length > 4 && <td className="px-2 py-1 text-slate-500">…</td>}
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
                   <button onClick={() => { setCsvData(null); setColumns([]); setFieldMeta({}); setFileName(''); setRowCount(0); setPreviewRows([]); setShowPreview(false); setXAxis(''); setYAxis([]); }}
-                    className={`mt-3 text-xs transition-colors ${dark ? 'text-slate-500 hover:text-red-400' : 'text-slate-400 hover:text-red-500'}`}
+                    className="mt-3 text-xs transition-colors text-slate-500 hover:text-red-400"
                   >
                     ✕ Remove file
                   </button>
@@ -2640,31 +3384,32 @@ export default function App() {
               )}
               {loading && (
                 <div className="mt-3 space-y-2">
-                  <div className={`h-3 rounded ${dark ? 'animate-shimmer' : 'animate-shimmer-light'}`} />
-                  <div className={`h-3 rounded w-2/3 ${dark ? 'animate-shimmer' : 'animate-shimmer-light'}`} />
+                  <div className="h-3 rounded animate-shimmer" />
+                  <div className="h-3 rounded w-2/3 animate-shimmer" />
                 </div>
               )}
               {!csvData && !loading && (
-                <button onClick={handleSampleCSV} className={`mt-3 w-full text-xs py-2 rounded-lg border transition-colors ${dark ? 'border-slate-600 text-slate-400 hover:text-blue-400 hover:border-blue-500/50' : 'border-slate-300 text-slate-500 hover:text-blue-500 hover:border-blue-400'}`}>	
+                <button onClick={handleSampleCSV} className="mt-3 w-full text-xs py-2 rounded-lg border border-slate-700 text-slate-400 hover:text-blue-400 hover:border-blue-500/50">	
                   ✨ Generate sample data
                 </button>
               )}
             </div>
-            {viewMode === 'custom' && csvData && (
+            {/* CUSTOM_CHART_BUILDER — Quick Presets (change false to viewMode === 'custom' to re-enable) */}
+            {false && csvData && (
               <div>
-                <h3 className={`text-xs font-bold uppercase tracking-widest mb-3 ${textMuted}`}>
+                <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-slate-400">
                   <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-violet-600 text-white text-[10px] mr-2">⚡</span>
                   Quick Presets
                 </h3>
                 <div className="space-y-1.5">
                   {PRESET_TEMPLATES.map(preset => (
                     <button key={preset.id} onClick={() => applyPreset(preset)}
-                      className={`w-full text-left px-3 py-2.5 rounded-lg border text-xs transition-all hover:scale-[1.01] ${dark ? 'border-slate-700/50 bg-slate-800/30 hover:border-blue-500/40 hover:bg-blue-500/5 text-slate-300' : 'border-slate-200 bg-slate-50/80 hover:border-blue-400 hover:bg-blue-50 text-slate-600'}`}>
+                      className="w-full text-left px-3 py-2.5 rounded-lg border text-xs transition-all hover:scale-[1.01] border-slate-700 bg-slate-800/30 hover:border-blue-500/40 hover:bg-blue-500/5 text-slate-300">
                       <div className="flex items-center gap-2">
                         <span className="text-base">{preset.icon}</span>
                         <div className="min-w-0">
-                          <p className={`font-semibold truncate ${dark ? 'text-slate-200' : 'text-slate-700'}`}>{preset.name}</p>
-                          <p className={`truncate ${textMuted}`}>{preset.description}</p>
+                          <p className="font-semibold truncate text-slate-200">{preset.name}</p>
+                          <p className="truncate text-slate-500">{preset.description}</p>
                         </div>
                       </div>
                     </button>
@@ -2673,10 +3418,10 @@ export default function App() {
               </div>
             )}
 
-            {/* ── Step 2: Configure Chart (Custom Mode) ── */}
-            {viewMode === 'custom' && (
+            {/* CUSTOM_CHART_BUILDER — Configure Chart (change false to viewMode === 'custom' to re-enable) */}
+            {false && (
               <div className={!csvData ? 'opacity-40 pointer-events-none' : ''}>
-                <h3 className={`text-xs font-bold uppercase tracking-widest mb-3 ${textMuted}`}>
+                <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-slate-400">
                   <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] mr-2">2</span>
                   Configure Chart
                 </h3>
@@ -2684,26 +3429,69 @@ export default function App() {
                 <div className="space-y-4">
                   {/* X-Axis */}
                   <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>X-Axis</label>
-                    <SearchableDropdown options={columns} value={xAxis} onChange={setXAxis} placeholder="Select column…" dark={dark} />
-                    {xAxis && <p className={`text-[10px] mt-0.5 ${textMuted}`}>{fieldMeta[xAxis] || 'auto'} field</p>}
+                    <label className="block text-xs font-semibold mb-1.5 text-slate-300">X-Axis</label>
+                    <SearchableDropdown options={columns} value={xAxis} onChange={setXAxis} placeholder="Select column…" dark={true} />
+                    {xAxis && <p className="text-[10px] mt-0.5 text-slate-400">{fieldMeta[xAxis] || 'auto'} field</p>}
                   </div>
 
-                  {/* Y-Axis */}
+                   {/* Y-Axis */}
                   <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>
+                    <label className="block text-xs font-semibold mb-1.5 text-slate-300">
                       Y-Axis {PIE_TYPES.includes(chartType) && <span className="text-amber-400 font-normal">(single only for pie)</span>}
                     </label>
-                    <SearchableDropdown options={columns} value={yAxis} onChange={setYAxis} placeholder="Select column(s)…" dark={dark} multiple maxSelections={PIE_TYPES.includes(chartType) ? 1 : 3} />
+                    <SearchableDropdown options={columns} value={yAxis} onChange={setYAxis} placeholder="Select column(s)…" dark={true} multiple maxSelections={PIE_TYPES.includes(chartType) ? 1 : 3} />
                   </div>
+
+                  {/* Organization Selector */}
+                  {uniqueOrgs.length > 0 && (
+                    <div>
+                      <label className="block text-xs font-semibold mb-1.5 text-slate-300">Select Organization(s)</label>
+                      <SearchableDropdown 
+                        options={uniqueOrgs} 
+                        value={selectedCustomOrg} 
+                        onChange={setSelectedCustomOrg} 
+                        placeholder="All Organizations" 
+                        dark={true} 
+                        multiple
+                      />
+                    </div>
+                  )}
+
+                  {/* Date Range Selector */}
+                  {uniqueDates.length > 0 && (
+                    <div>
+                      <label className="block text-xs font-semibold mb-1.5 text-slate-300">Filter Date Range</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[9px] font-semibold mb-1 text-slate-400">Start Date</label>
+                          <SearchableDropdown 
+                            options={uniqueDates} 
+                            value={selectedCustomStartDate} 
+                            onChange={setSelectedCustomStartDate} 
+                            placeholder="Start date…" 
+                            dark={true} 
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-semibold mb-1 text-slate-400">End Date</label>
+                          <SearchableDropdown 
+                            options={uniqueDates} 
+                            value={selectedCustomEndDate} 
+                            onChange={setSelectedCustomEndDate} 
+                            placeholder="End date…" 
+                            dark={true} 
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {sameAxisWarning && (
                     <p className="text-xs text-amber-400 bg-amber-500/10 px-3 py-2 rounded-lg">⚠️ X and Y axis are the same column</p>
                   )}
 
-                  {/* ── Chart Type with Recommendations (Feature 1) ── */}
+                  {/* Chart Type */}
                   <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>Chart Type</label>
                     {recommendations.length > 0 ? (
                       <div className="space-y-1">
                         {recommendations.slice(0, 6).map((rec, idx) => {
@@ -2717,16 +3505,16 @@ export default function App() {
                                 isActive
                                   ? 'border-blue-500 bg-blue-600/10 ring-1 ring-blue-500/30'
                                   : isRecommended
-                                    ? (dark ? 'border-slate-600 bg-slate-800/40 hover:border-blue-500/50' : 'border-slate-200 bg-white hover:border-blue-400')
-                                    : (dark ? 'border-slate-700/30 bg-slate-800/20 opacity-60 hover:opacity-100' : 'border-slate-100 bg-slate-50/50 opacity-50 hover:opacity-100')
+                                    ? 'border-slate-600 bg-slate-800/40 hover:border-blue-500/50'
+                                    : 'border-slate-700/30 bg-slate-800/20 opacity-60 hover:opacity-100'
                               }`}>
                               <span className="text-base flex-shrink-0">{ct.icon}</span>
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-1.5">
-                                  <span className={`font-semibold ${isActive ? 'text-blue-400' : (dark ? 'text-slate-200' : 'text-slate-700')}`}>{ct.label}</span>
+                                  <span className={`font-semibold ${isActive ? 'text-blue-400' : 'text-slate-200'}`}>{ct.label}</span>
                                   {isRecommended && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400">★ Best</span>}
                                 </div>
-                                <p className={`truncate ${textMuted}`}>{rec.reason}</p>
+                                <p className="truncate text-slate-500">{rec.reason}</p>
                               </div>
                               {isActive && <span className="w-2 h-2 rounded-full bg-blue-50 flex-shrink-0" />}
                             </button>
@@ -2734,7 +3522,7 @@ export default function App() {
                         })}
                         {recommendations.length > 6 && (
                           <details className="mt-1">
-                            <summary className={`text-xs cursor-pointer px-3 py-1 ${textMuted} hover:text-blue-400`}>More chart types…</summary>
+                            <summary className="text-xs cursor-pointer px-3 py-1 text-slate-500 hover:text-blue-400">More chart types…</summary>
                             <div className="mt-1 space-y-1">
                               {recommendations.slice(6).map(rec => {
                                 const ct = CHART_TYPES.find(t => t.value === rec.type);
@@ -2743,10 +3531,10 @@ export default function App() {
                                 return (
                                   <button key={rec.type} onClick={() => setChartType(rec.type)} title={ct.tip}
                                     className={`w-full text-left px-3 py-1.5 rounded-lg border text-xs flex items-center gap-2 transition-all ${
-                                      isActive ? 'border-blue-500 bg-blue-600/10' : (dark ? 'border-slate-700/30 opacity-60 hover:opacity-100' : 'border-slate-100 opacity-50 hover:opacity-100')
+                                      isActive ? 'border-blue-500 bg-blue-600/10' : 'border-slate-700/30 opacity-60 hover:opacity-100'
                                     }`}>
                                     <span>{ct.icon}</span>
-                                    <span className={isActive ? 'text-blue-400 font-semibold' : (dark ? 'text-slate-300' : 'text-slate-600')}>{ct.label}</span>
+                                    <span className={isActive ? 'text-blue-400 font-semibold' : 'text-slate-300'}>{ct.label}</span>
                                   </button>
                                 );
                               })}
@@ -2759,66 +3547,66 @@ export default function App() {
                         options={CHART_TYPES.map(t => t.label)}
                         value={CHART_TYPES.find(t => t.value === chartType)?.label || ''}
                         onChange={(label) => { const ct = CHART_TYPES.find(t => t.label === label); if (ct) setChartType(ct.value); }}
-                        placeholder="Select chart type…" dark={dark} />
+                        placeholder="Select chart type…" dark={true} />
                     )}
                   </div>
 
-                  {/* Aggregation toggle (Feature 3) */}
-                  <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>Aggregation</label>
-                    <div className="flex gap-1.5">
-                      {['sum', 'avg', 'count'].map(mode => (
-                        <button key={mode} onClick={() => setAggregation(mode)}
-                          className={`flex-1 py-1.5 rounded-lg text-xs font-semibold capitalize transition-all ${
-                            aggregation === mode ? 'bg-blue-600 text-white shadow-sm'
-                            : (dark ? 'bg-slate-700/60 text-slate-400 hover:bg-slate-700' : 'bg-white text-slate-500 hover:bg-slate-100 border border-slate-200')
-                          }`}>
-                          {mode === 'avg' ? 'Average' : mode === 'count' ? 'Count' : 'Sum'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                   {/* Aggregation toggle (Feature 3) */}
+                   <div>
+                     <label className="block text-xs font-semibold mb-1.5 text-slate-300">Aggregation</label>
+                     <div className="flex gap-1.5">
+                       {['none', 'sum', 'avg', 'count'].map(mode => (
+                         <button key={mode} onClick={() => setAggregation(mode)}
+                           className={`flex-1 py-1.5 rounded-lg text-xs font-semibold capitalize transition-all ${
+                             aggregation === mode ? 'bg-blue-600 text-white shadow-sm'
+                             : 'bg-slate-800/60 text-slate-400 hover:bg-slate-700'
+                           }`}>
+                           {mode === 'none' ? 'None' : mode === 'avg' ? 'Average' : mode === 'count' ? 'Count' : 'Sum'}
+                         </button>
+                       ))}
+                     </div>
+                   </div>
 
                   {/* Bubble field selector */}
                   {chartType === 'bubble' && (
                     <div>
-                      <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>Bubble Size Field</label>
-                      <SearchableDropdown options={numericColumns} value={bubbleField} onChange={setBubbleField} placeholder="Select size metric…" dark={dark} />
+                      <label className="block text-xs font-semibold mb-1.5 text-slate-300">Bubble Size Field</label>
+                      <SearchableDropdown options={numericColumns} value={bubbleField} onChange={setBubbleField} placeholder="Select size metric…" dark={true} />
                     </div>
                   )}
 
                   {/* Color palette */}
                   <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>Color Palette</label>
+                    <label className="block text-xs font-semibold mb-1.5 text-slate-300">Color Palette</label>
                     <div className="flex gap-2 flex-wrap">
                       {Object.entries(COLOR_PALETTES).map(([name, clrs]) => (
                         <button key={name} onClick={() => setPalette(name)}
-                          className={`flex gap-0.5 p-1.5 rounded-lg border transition-all ${palette === name ? 'border-blue-500 ring-1 ring-blue-500/30' : (dark ? 'border-slate-600 hover:border-slate-500' : 'border-slate-300 hover:border-slate-400')}`} title={name}>
+                          className={`flex gap-0.5 p-1.5 rounded-lg border transition-all ${palette === name ? 'border-blue-500 ring-1 ring-blue-500/30' : 'border-slate-700 hover:border-slate-650'}`} title={name}>
                           {clrs.slice(0, 3).map((c, i) => <span key={i} className="w-3 h-3 rounded-sm" style={{ backgroundColor: c }} />)}
                         </button>
                       ))}
                     </div>
-                    <p className={`text-[10px] mt-1 ${textMuted}`}>{palette}</p>
+                    <p className="text-[10px] mt-1 text-slate-500">{palette}</p>
                   </div>
 
                   {/* Data filters */}
-                  <div className={`rounded-lg border p-3 space-y-3 ${dark ? 'border-slate-700/50 bg-slate-800/30' : 'border-slate-200 bg-slate-50'}`}>
-                    <p className={`text-[10px] font-bold uppercase tracking-wider ${textMuted}`}>Data Filters</p>
+                  <div className="rounded-lg border p-3 space-y-3 border-slate-800 bg-slate-800/30">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Data Filters</p>
                     <label className="flex items-center gap-2.5 cursor-pointer">
                       <div className="relative">
                         <input type="checkbox" checked={filterZeros} onChange={e => setFilterZeros(e.target.checked)} className="sr-only peer" />
-                        <div className={`w-9 h-5 rounded-full transition-colors ${dark ? 'bg-slate-600 peer-checked:bg-emerald-600' : 'bg-slate-300 peer-checked:bg-emerald-500'}`} />
+                        <div className="w-9 h-5 rounded-full transition-colors bg-slate-700 peer-checked:bg-emerald-600" />
                         <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4 shadow" />
                       </div>
-                      <span className={`text-sm ${dark ? 'text-slate-300' : 'text-slate-600'}`}>Hide zero values</span>
+                      <span className="text-sm text-slate-300">Hide zero values</span>
                     </label>
                     <div>
-                      <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>Show Top</label>
+                      <label className="block text-xs font-semibold mb-1.5 text-slate-300">Show Top</label>
                       <div className="flex gap-1.5">
                         {['10', '15', '25', '50', 'all'].map(opt => (
                           <button key={opt} onClick={() => setTopN(opt)}
                             className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                              topN === opt ? 'bg-blue-600 text-white shadow-sm' : (dark ? 'bg-slate-700/60 text-slate-400 hover:bg-slate-700' : 'bg-white text-slate-500 hover:bg-slate-100 border border-slate-200')
+                              topN === opt ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-800/60 text-slate-400 hover:bg-slate-700'
                             }`}>
                             {opt === 'all' ? 'All' : opt}
                           </button>
@@ -2829,34 +3617,36 @@ export default function App() {
                       <label className="flex items-center gap-2.5 cursor-pointer">
                         <div className="relative">
                           <input type="checkbox" checked={logScale} onChange={e => setLogScale(e.target.checked)} className="sr-only peer" />
-                          <div className={`w-9 h-5 rounded-full transition-colors ${dark ? 'bg-slate-600 peer-checked:bg-violet-600' : 'bg-slate-300 peer-checked:bg-violet-500'}`} />
+                          <div className="w-9 h-5 rounded-full transition-colors bg-slate-700 peer-checked:bg-violet-600" />
                           <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4 shadow" />
                         </div>
-                        <span className={`text-sm ${dark ? 'text-slate-300' : 'text-slate-600'}`}>Log scale</span>
+                        <span className="text-sm text-slate-300">Log scale</span>
                       </label>
                     )}
                   </div>
+
+
 
                   {!PIE_TYPES.includes(chartType) && (
                     <label className="flex items-center gap-2.5 cursor-pointer group">
                       <div className="relative">
                         <input type="checkbox" checked={showTrendline} onChange={e => setShowTrendline(e.target.checked)} className="sr-only peer" />
-                        <div className={`w-9 h-5 rounded-full transition-colors ${dark ? 'bg-slate-600 peer-checked:bg-blue-600' : 'bg-slate-300 peer-checked:bg-blue-500'}`} />
+                        <div className="w-9 h-5 rounded-full transition-colors bg-slate-700 peer-checked:bg-blue-600" />
                         <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4 shadow" />
                       </div>
-                      <span className={`text-sm ${dark ? 'text-slate-300' : 'text-slate-600'}`}>Add trendline</span>
+                      <span className="text-sm text-slate-300">Add trendline</span>
                     </label>
                   )}
 
                   {yAxis.length > 0 && (
                     <div>
-                      <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>Legend Labels</label>
+                      <label className="block text-xs font-semibold mb-1.5 text-slate-300">Legend Labels</label>
                       <div className="space-y-2">
                         {yAxis.map(col => (
                           <div key={col} className="flex items-center gap-2">
-                            <span className={`text-[10px] font-mono-data w-16 truncate ${textMuted}`}>{col}</span>
+                            <span className="text-[10px] font-mono-data w-16 truncate text-slate-400">{col}</span>
                             <input type="text" value={legendLabels[col] || ''} onChange={e => setLegendLabels(prev => ({ ...prev, [col]: e.target.value }))} placeholder={col}
-                              className={`flex-1 px-2.5 py-1.5 rounded-lg border text-sm transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500/50 ${dark ? 'bg-slate-800/80 border-slate-600 text-slate-200 placeholder-slate-500' : 'bg-white border-slate-300 text-slate-700 placeholder-slate-400'}`} />
+                              className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-700 bg-slate-800/80 text-slate-200 placeholder-slate-500 transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500/50" />
                           </div>
                         ))}
                       </div>
@@ -2871,10 +3661,11 @@ export default function App() {
               </div>
             )}
 
+
             {/* ── Step 2: Configure Weekly Report (Weekly Mode) ── */}
             {viewMode === 'weekly' && (
               <div className={!csvData ? 'opacity-40 pointer-events-none' : ''}>
-                <h3 className={`text-xs font-bold uppercase tracking-widest mb-3 ${textMuted}`}>
+                <h3 className="text-xs font-bold uppercase tracking-widest mb-3 text-slate-400">
                   <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-violet-600 text-white text-[10px] mr-2">2</span>
                   Configure Report
                 </h3>
@@ -2882,74 +3673,92 @@ export default function App() {
                 <div className="space-y-4">
                   {/* Organization Selector */}
                   <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>Select Organization</label>
+                    <label className="block text-xs font-semibold mb-1.5 text-slate-300">Select Organization(s)</label>
                     <SearchableDropdown 
                       options={uniqueOrgs} 
                       value={selectedOrg} 
                       onChange={setSelectedOrg} 
-                      placeholder="Select organization…" 
-                      dark={dark} 
+                      placeholder="Select organization(s)…" 
+                      dark={true} 
+                      multiple
                     />
                   </div>
 
                   {/* Date Range Selector */}
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>Start Date</label>
+                      <label className="block text-xs font-semibold mb-1.5 text-slate-300">Start Date</label>
                       <SearchableDropdown 
                         options={uniqueOrgDates} 
                         value={selectedWeeklyStartDate} 
                         onChange={(date) => {
                           setSelectedWeeklyStartDate(date);
-                          if (weeklyHistoryLimit === 'mau') {
-                            const startIdx = uniqueOrgDates.indexOf(date);
-                            if (startIdx !== -1) {
-                              const targetEndIdx = Math.min(uniqueOrgDates.length - 1, startIdx + 3);
-                              setSelectedWeeklyEndDate(uniqueOrgDates[targetEndIdx]);
+                          if (date) {
+                            if (weeklyHistoryLimit === 'mau') {
+                              const startIdx = uniqueOrgDates.indexOf(date);
+                              if (startIdx !== -1) {
+                                const targetEndIdx = Math.min(uniqueOrgDates.length - 1, startIdx + 3);
+                                setSelectedWeeklyEndDate(uniqueOrgDates[targetEndIdx]);
+                              }
+                            } else if (weeklyHistoryLimit === 'quarter') {
+                              const startIdx = uniqueOrgDates.indexOf(date);
+                              if (startIdx !== -1) {
+                                const targetEndIdx = Math.min(uniqueOrgDates.length - 1, startIdx + 11);
+                                setSelectedWeeklyEndDate(uniqueOrgDates[targetEndIdx]);
+                              }
+                            } else {
+                              const startIdx = uniqueOrgDates.indexOf(date);
+                              const endIdx = uniqueOrgDates.indexOf(selectedWeeklyEndDate);
+                              if (startIdx !== -1 && endIdx !== -1 && endIdx < startIdx) {
+                                setSelectedWeeklyEndDate(date);
+                              }
                             }
                           }
                         }} 
                         placeholder="Start date…" 
-                        dark={dark} 
+                        dark={true} 
                       />
                     </div>
                     <div>
-                      <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>End Date</label>
+                      <label className="block text-xs font-semibold mb-1.5 text-slate-300">End Date</label>
                       <SearchableDropdown 
                         options={uniqueOrgDates} 
                         value={selectedWeeklyEndDate} 
                         onChange={(date) => {
-                          setSelectedWeeklyEndDate(date);
-                          if (weeklyHistoryLimit === 'mau') {
+                          if (date) {
+                            setSelectedWeeklyEndDate(date);
+                            setWeeklyHistoryLimit('custom');
+                            const startIdx = uniqueOrgDates.indexOf(selectedWeeklyStartDate);
                             const endIdx = uniqueOrgDates.indexOf(date);
-                            if (endIdx !== -1) {
-                              const targetStartIdx = Math.max(0, endIdx - 3);
-                              setSelectedWeeklyStartDate(uniqueOrgDates[targetStartIdx]);
+                            if (startIdx !== -1 && endIdx !== -1 && endIdx < startIdx) {
+                              setSelectedWeeklyStartDate(date);
                             }
+                          } else {
+                            setSelectedWeeklyEndDate('');
                           }
                         }} 
                         placeholder="End date…" 
-                        dark={dark} 
+                        dark={true} 
                       />
                     </div>
                   </div>
 
                   {/* Display Metrics */}
                   <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>Display Metrics</label>
+                    <label className="block text-xs font-semibold mb-1.5 text-slate-300">Display Metrics</label>
                     <SearchableDropdown 
                       options={columns} 
                       value={selectedWeeklyMetrics} 
                       onChange={setSelectedWeeklyMetrics} 
                       placeholder="Select columns…" 
-                      dark={dark} 
+                      dark={true} 
                       multiple
                     />
                   </div>
 
                   {/* Chart Type */}
                   <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>Chart Type</label>
+                    <label className="block text-xs font-semibold mb-1.5 text-slate-300">Chart Type</label>
                     <div className="flex gap-1.5">
                       {[
                         { value: 'line', label: 'Line', icon: '📈' },
@@ -2960,7 +3769,7 @@ export default function App() {
                           className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1 ${
                             weeklyChartType === opt.value 
                               ? 'bg-violet-600 text-white shadow-sm' 
-                              : (dark ? 'bg-slate-700/60 text-slate-400 hover:bg-slate-700' : 'bg-white text-slate-500 hover:bg-slate-100 border border-slate-200')
+                              : 'bg-slate-800/60 text-slate-400 hover:bg-slate-700'
                           }`}>
                           <span>{opt.icon}</span>
                           <span>{opt.label}</span>
@@ -2971,11 +3780,12 @@ export default function App() {
 
                   {/* History Duration */}
                   <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${textSecondary}`}>History Duration</label>
+                    <label className="block text-xs font-semibold mb-1.5 text-slate-300">History Duration</label>
                     <div className="flex gap-1.5">
                       {[
                         { value: 'mau', label: 'MAU (4W)' },
-                        { value: 'quarter', label: 'Quarter (12W)' }
+                        { value: 'quarter', label: 'Quarter (12W)' },
+                        ...(weeklyHistoryLimit === 'custom' ? [{ value: 'custom', label: `Custom (${Math.abs(uniqueOrgDates.indexOf(selectedWeeklyEndDate) - uniqueOrgDates.indexOf(selectedWeeklyStartDate)) + 1}W)` }] : [])
                       ].map(opt => (
                         <button key={opt.value} onClick={() => {
                           setWeeklyHistoryLimit(opt.value);
@@ -2986,7 +3796,11 @@ export default function App() {
                               setSelectedWeeklyEndDate(uniqueOrgDates[targetEndIdx]);
                             }
                           } else if (opt.value === 'quarter') {
-                            if (uniqueOrgDates.length > 0) {
+                            const startIdx = uniqueOrgDates.indexOf(selectedWeeklyStartDate);
+                            if (startIdx !== -1) {
+                              const targetEndIdx = Math.min(uniqueOrgDates.length - 1, startIdx + 11);
+                              setSelectedWeeklyEndDate(uniqueOrgDates[targetEndIdx]);
+                            } else if (uniqueOrgDates.length > 0) {
                               setSelectedWeeklyStartDate(uniqueOrgDates[0]);
                               setSelectedWeeklyEndDate(uniqueOrgDates[uniqueOrgDates.length - 1]);
                             }
@@ -2995,7 +3809,7 @@ export default function App() {
                           className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                             weeklyHistoryLimit === opt.value 
                               ? 'bg-violet-600 text-white shadow-sm' 
-                              : (dark ? 'bg-slate-700/60 text-slate-400 hover:bg-slate-700' : 'bg-white text-slate-500 hover:bg-slate-100 border border-slate-200')
+                              : 'bg-slate-800/60 text-slate-400 hover:bg-slate-700'
                           }`}>
                           {opt.label}
                         </button>
@@ -3010,8 +3824,9 @@ export default function App() {
 
         {/* ═══ MAIN CANVAS ═══ */}
         <main className={`flex-1 overflow-y-auto ${dark ? 'canvas-grid-dark' : 'canvas-grid-light'}`}>
-          <div className="p-8 max-w-5xl mx-auto">
-            {viewMode === 'custom' ? (
+          <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto">
+            {/* CUSTOM_CHART_BUILDER — Custom chart canvas (change false to viewMode === 'custom' to re-enable) */}
+            {false ? (
               !showPreview ? (
                 <div className="flex flex-col items-center justify-center h-full min-h-[500px] text-center animate-fadeIn">
                   <svg width="100" height="100" viewBox="0 0 100 100" fill="none" className={`mb-6 ${dark ? 'text-slate-700' : 'text-slate-300'}`}>
@@ -3033,14 +3848,13 @@ export default function App() {
                 </div>
               ) : (
                 <div className="animate-fadeIn">
-                  {/* Chart title */}
                   <div className="flex items-center justify-between mb-4">
                     <div>
                       <h2 className={`text-lg font-bold ${dark ? 'text-white' : 'text-slate-800'}`}>
                         {yAxis.join(', ')} <span className={`font-normal ${dark ? 'text-slate-500' : 'text-slate-400'}`}>vs</span> {xAxis}
                       </h2>
                       <p className={`text-xs ${dark ? 'text-slate-500' : 'text-slate-400'}`}>
-                        {CHART_TYPES.find(t => t.value === chartType)?.label} · {csvData.length} data points · Aggregation: {aggregation}
+                        {CHART_TYPES.find(t => t.value === chartType)?.label} · {csvData.length} data points · Aggregation: {aggregation === 'none' ? 'None (Raw Data)' : aggregation}
                       </p>
                     </div>
                     <span className={`text-[10px] font-mono-data px-3 py-1.5 rounded-lg ${dark ? 'bg-slate-800 text-slate-500' : 'bg-slate-100 text-slate-400'}`}>
@@ -3048,7 +3862,7 @@ export default function App() {
                     </span>
                   </div>
 
-                  <StatsRibbon yColumns={yAxis} data={visibleData} dark={dark} palette={palette} />
+                  <StatsRibbon yColumns={customChartYKeys} data={visibleData} dark={dark} palette={palette} />
 
                   <div className={`rounded-2xl border p-5 mb-6 ${dark ? 'bg-slate-800/40 border-slate-700/50' : 'bg-white border-slate-200 shadow-sm'}`}>
                     <ChartRenderer 
@@ -3068,6 +3882,68 @@ export default function App() {
                   <div className={`rounded-xl border px-5 py-4 mb-6 animate-slideUp ${dark ? 'bg-slate-800/30 border-slate-700/50' : 'bg-blue-50/70 border-blue-100'}`}>
                     <p className={`text-sm leading-relaxed ${dark ? 'text-slate-300' : 'text-slate-600'}`}>💡 {previewInsight}</p>
                   </div>
+
+                  {viewMode === 'custom' && selectedCustomOrg.length > 1 && comparisonStats.length > 0 && (
+                    <div className="mb-6 animate-fadeIn">
+                      <div className="flex items-center gap-2 mb-4">
+                        <span className="text-xl">📊</span>
+                        <h3 className={`text-sm font-bold uppercase tracking-wider ${dark ? 'text-slate-200' : 'text-slate-700'}`}>
+                          Multi-Organization Custom Comparison Details
+                        </h3>
+                      </div>
+                      
+                      <div className="grid gap-6 grid-cols-1 xl:grid-cols-2">
+                        {comparisonStats.map(({ metric, orgStats }) => (
+                          <div 
+                            key={metric}
+                            className={`rounded-2xl border p-5 transition-all duration-300 hover:shadow-md ${
+                              dark ? 'bg-slate-800/40 border-slate-700/50' : 'bg-white border-slate-200 shadow-sm'
+                            }`}
+                          >
+                            <h4 className={`text-sm font-bold uppercase tracking-wider mb-4 border-b pb-2 ${
+                              dark ? 'text-slate-300 border-slate-700' : 'text-slate-600 border-slate-100'
+                            }`}>
+                              Metric: {metric}
+                            </h4>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className={`border-b text-[10px] font-bold uppercase tracking-wider ${dark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>
+                                    <th className="py-2 text-left">Organization</th>
+                                    <th className="py-2 text-right">Sum</th>
+                                    <th className="py-2 text-right text-violet-400">Average</th>
+                                    <th className="py-2 text-right text-emerald-400">Peak (Max)</th>
+                                    <th className="py-2 text-right">Count</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {orgStats.map((stat) => (
+                                    <tr key={stat.orgName} className={`border-b last:border-0 ${dark ? 'border-slate-700/50 hover:bg-slate-800/20' : 'border-slate-100 hover:bg-slate-50'}`}>
+                                      <td className={`py-3 text-left font-semibold truncate max-w-[150px] ${dark ? 'text-slate-200' : 'text-slate-700'}`} title={stat.orgName}>
+                                        {stat.orgName}
+                                      </td>
+                                      <td className={`py-3 text-right font-bold ${dark ? 'text-slate-300' : 'text-slate-600'}`}>
+                                        {formatAxisTick(stat.sum)}
+                                      </td>
+                                      <td className={`py-3 text-right font-bold text-violet-400`}>
+                                        {formatAxisTick(stat.avg)}
+                                      </td>
+                                      <td className={`py-3 text-right font-bold text-emerald-400`}>
+                                        {formatAxisTick(stat.max)}
+                                      </td>
+                                      <td className={`py-3 text-right ${dark ? 'text-slate-500' : 'text-slate-400'}`}>
+                                        {stat.count}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   <div className="flex gap-3 animate-slideUp" style={{ animationDelay: '0.1s' }}>
                     <button onClick={handleKeepChart}
@@ -3106,208 +3982,314 @@ export default function App() {
                 </div>
               ) : (
                 <div className="animate-fadeIn">
-                  {/* Metadata banner */}
-                  {(() => {
-                    const firstRow = weeklyReportData.historyRows[0] || {};
-                    const regionKey = Object.keys(firstRow).find(k => k.toLowerCase().includes('region')) || 'Focus Region';
-                    const cohortKey = Object.keys(firstRow).find(k => k.toLowerCase().includes('cohort')) || 'India Cohort';
-                    const region = firstRow[regionKey] || '—';
-                    const cohort = firstRow[cohortKey] || '—';
-                    
-                    return (
-                      <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b pb-5" style={{ borderColor: dark ? '#334155' : '#e2e8f0' }}>
-                        <div>
-                          <h2 className={`text-2xl font-extrabold tracking-tight ${textPrimary}`}>{selectedOrg}</h2>
-                          <p className={`text-xs mt-1 ${textSecondary}`}>
-                            Range: <span className="font-semibold text-violet-500">{selectedWeeklyStartDate}</span> to <span className="font-semibold text-violet-500">{selectedWeeklyEndDate}</span>
-                          </p>
-                        </div>
-                        <div className="flex gap-2">
-                          <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg ${dark ? 'bg-slate-800 text-slate-400 border border-slate-700/50' : 'bg-slate-100 text-slate-600 border border-slate-200'}`}>
-                            Region: {region}
-                          </span>
-                          <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg ${dark ? 'bg-violet-950/40 text-violet-400 border border-violet-800/30' : 'bg-violet-50 text-violet-600 border border-violet-100'}`}>
-                            Cohort: {cohort}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })()}
+                  {weeklyReportData.isComparison ? (
+                    (() => {
+                      const colors = [
+                        { text: 'text-blue-500', hex: '#3b82f6' },
+                        { text: 'text-violet-500', hex: '#8b5cf6' },
+                        { text: 'text-emerald-500', hex: '#10b981' },
+                        { text: 'text-amber-500', hex: '#f59e0b' },
+                        { text: 'text-rose-500', hex: '#f43f5e' },
+                        { text: 'text-cyan-500', hex: '#06b6d4' },
+                        { text: 'text-pink-500', hex: '#ec4899' },
+                        { text: 'text-indigo-500', hex: '#6366f1' },
+                      ];
+                      const chartSeries = [];
+                      weeklyReportData.selectedOrgs.forEach((org, orgIdx) => {
+                        selectedWeeklyMetrics.forEach((metric, metricIdx) => {
+                          const idx = orgIdx * selectedWeeklyMetrics.length + metricIdx;
+                          const color = colors[idx % colors.length];
+                          chartSeries.push({
+                            key: `${org} - ${metric}`,
+                            label: `${org} - ${metric}`,
+                            colorClass: color.text,
+                            colorHex: color.hex
+                          });
+                        });
+                      });
 
-                  {/* Top Stats Cards Grid */}
-                  {(() => {
-                    const colors = [
-                      { text: 'text-blue-500', hex: '#3b82f6' },
-                      { text: 'text-violet-500', hex: '#8b5cf6' },
-                      { text: 'text-emerald-500', hex: '#10b981' },
-                      { text: 'text-amber-500', hex: '#f59e0b' },
-                      { text: 'text-rose-500', hex: '#f43f5e' },
-                      { text: 'text-cyan-500', hex: '#06b6d4' },
-                      { text: 'text-pink-500', hex: '#ec4899' },
-                      { text: 'text-indigo-500', hex: '#6366f1' },
-                    ];
-                    const metricsList = selectedWeeklyMetrics.map((colName, idx) => {
-                      const color = colors[idx % colors.length];
-                      return {
-                        key: colName,
-                        label: colName,
-                        colorClass: color.text,
-                        colorHex: color.hex
-                      };
-                    });
-
-                    return (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                        {metricsList.map(m => {
-                          const colName = m.key;
-                          const currentVal = Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx][colName]) || 0;
-                          const prevVal = weeklyReportData.selectedIdx > 0 
-                            ? (Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx - 1][colName]) || 0) 
-                            : null;
-                          const changePct = (prevVal !== null && prevVal > 0)
-                            ? ((currentVal - prevVal) / prevVal) * 100
-                            : null;
-
-                          return (
-                            <div key={m.key} className={`rounded-xl border p-4 ${dark ? 'bg-slate-800/40 border-slate-700/50' : 'bg-white border-slate-200 shadow-sm'}`}>
-                              <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${textMuted}`}>{m.label}</p>
-                              <p className={`text-2xl font-extrabold ${m.colorClass}`}>{currentVal.toLocaleString()}</p>
-                              <div className="flex items-center gap-1.5 mt-1.5">
-                                {changePct !== null ? (
-                                  <>
-                                    <span className={`text-xs font-bold ${changePct >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                                      {changePct >= 0 ? '↑' : '↓'} {Math.abs(changePct).toFixed(1)}%
-                                    </span>
-                                    <span className={`text-[10px] ${textMuted}`}>vs last week</span>
-                                  </>
-                                ) : (
-                                  <span className={`text-[10px] ${textMuted}`}>No prior data</span>
-                                )}
-                              </div>
+                      return (
+                        <>
+                          {/* Metadata banner (Comparison) */}
+                          <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b pb-5" style={{ borderColor: dark ? '#334155' : '#e2e8f0' }}>
+                            <div>
+                              <h2 className={`text-2xl font-extrabold tracking-tight ${textPrimary}`}>{selectedOrg.join(' vs. ')}</h2>
+                              <p className={`text-xs mt-1 ${textSecondary}`}>
+                                Range: <span className="font-semibold text-violet-500">{selectedWeeklyStartDate}</span> to <span className="font-semibold text-violet-500">{selectedWeeklyEndDate}</span>
+                              </p>
                             </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
-
-                  {/* Historical Trend Line Graph */}
-                  {(() => {
-                    const colors = [
-                      { text: 'text-blue-500', hex: '#3b82f6' },
-                      { text: 'text-violet-500', hex: '#8b5cf6' },
-                      { text: 'text-emerald-500', hex: '#10b981' },
-                      { text: 'text-amber-500', hex: '#f59e0b' },
-                      { text: 'text-rose-500', hex: '#f43f5e' },
-                      { text: 'text-cyan-500', hex: '#06b6d4' },
-                      { text: 'text-pink-500', hex: '#ec4899' },
-                      { text: 'text-indigo-500', hex: '#6366f1' },
-                    ];
-                    const activeMetrics = selectedWeeklyMetrics.map((colName, idx) => {
-                      const color = colors[idx % colors.length];
-                      return {
-                        key: colName,
-                        label: colName,
-                        colorClass: color.text,
-                        colorHex: color.hex
-                      };
-                    });
-
-                    return (
-                      <div className={`rounded-2xl border p-5 mb-6 ${dark ? 'bg-slate-800/40 border-slate-700/50' : 'bg-white border-slate-200 shadow-sm'}`}>
-                        <div className="flex items-center justify-between mb-4">
-                          <div>
-                            <h3 className={`text-sm font-bold ${textPrimary}`}>Historical Trend Progression</h3>
-                            <p className={`text-xs ${textMuted}`}>Displaying chronological weekly metrics with target week indicator</p>
+                            <div className="flex gap-2">
+                              <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg ${dark ? 'bg-slate-800 text-slate-400 border border-slate-700/50' : 'bg-slate-100 text-slate-600 border border-slate-200'}`}>
+                                Comparison Mode
+                              </span>
+                              <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg ${dark ? 'bg-violet-950/40 text-violet-400 border border-violet-800/30' : 'bg-violet-50 text-violet-600 border border-violet-100'}`}>
+                                {selectedOrg.length} Orgs
+                              </span>
+                            </div>
                           </div>
-                        </div>
-                        <div style={{ width: '100%', height: 350 }}>
-                          <ResponsiveContainer>
-                            <ComposedChart data={weeklyReportData.historyRows}>
-                              <CartesianGrid strokeDasharray="3 3" stroke={dark ? '#334155' : '#e2e8f0'} vertical={false} />
-                              <XAxis 
-                                dataKey={weeklyReportData.dateCol} 
-                                stroke={dark ? '#64748b' : '#94a3b8'} 
-                                fontSize={10} 
-                                tickLine={false} 
-                                axisLine={false}
-                                tickFormatter={(str) => {
-                                  const d = new Date(str);
-                                  return isNaN(d) ? str : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                                }}
-                              />
-                              <YAxis 
-                                stroke={dark ? '#64748b' : '#94a3b8'} 
-                                fontSize={10} 
-                                tickLine={false} 
-                                axisLine={false}
-                                tickFormatter={(val) => val.toLocaleString()}
-                              />
-                              <Tooltip content={<CustomTooltip dark={dark} />} />
-                              <Legend iconType="circle" wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
-                              
-                              <ReferenceLine 
-                                x={selectedWeeklyEndDate} 
-                                stroke={dark ? '#a855f7' : '#8b5cf6'} 
-                                strokeWidth={2}
-                                strokeDasharray="4 4"
-                                label={{ value: 'Target Week', fill: dark ? '#c084fc' : '#6b21a8', fontSize: 10, position: 'top' }} 
-                              />
-                              
-                              {activeMetrics.map(m => {
-                                const colName = m.key;
-                                const color = m.colorHex;
-                                if (weeklyChartType === 'bar') {
-                                  return (
-                                    <Bar 
-                                      key={m.key} 
-                                      dataKey={colName} 
-                                      name={m.label} 
-                                      fill={color} 
-                                      radius={[4, 4, 0, 0]}
-                                    />
-                                  );
-                                } else if (weeklyChartType === 'area') {
-                                  return (
-                                    <Area 
-                                      key={m.key} 
-                                      type="monotone"
-                                      dataKey={colName} 
-                                      name={m.label} 
-                                      stroke={color} 
-                                      fill={color} 
-                                      fillOpacity={0.15}
-                                      strokeWidth={2}
-                                    />
-                                  );
-                                } else {
-                                  return (
-                                    <Line 
-                                      key={m.key} 
-                                      type="monotone" 
-                                      dataKey={colName} 
-                                      name={m.label} 
-                                      stroke={color} 
-                                      strokeWidth={3} 
-                                      dot={{ r: 4, strokeWidth: 1 }}
-                                      activeDot={{ r: 7, strokeWidth: 0 }}
-                                    />
-                                  );
-                                }
-                              })}
-                            </ComposedChart>
-                          </ResponsiveContainer>
-                        </div>
-                      </div>
-                    );
-                  })()}
 
-                  {/* Rolling Details Panel */}
-                  <div className="mb-6">
-                    <h3 className={`text-sm font-bold mb-3.5 ${textPrimary}`}>Rolling {weeklyReportData.windowSize}-Week Active Window</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                      {weeklyReportData.activeWindow.map((week, idx) => {
-                        const isSelectedWeek = week.date === selectedWeeklyEndDate;
+                          {/* Top Stats Cards Grid (Comparison) */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                            {selectedWeeklyMetrics.map((metric) => {
+                              return (
+                                <div key={metric} className={`rounded-xl border p-4 ${dark ? 'bg-slate-800/40 border-slate-700/50' : 'bg-white border-slate-200 shadow-sm'}`}>
+                                  <p className={`text-[10px] font-bold uppercase tracking-wider mb-2 ${textMuted}`}>{metric}</p>
+                                  <div className="space-y-2">
+                                    {weeklyReportData.orgWindowSummaries.map((summary) => {
+                                      const org = summary.org;
+                                      const latestRow = summary.latestRow;
+                                      
+                                      const orgRows = csvData.filter(r => String(r[weeklyReportData.orgCol]).trim() === org);
+                                      const currentVal = Number(latestRow[metric]) || 0;
+                                      
+                                      const orgDates = Array.from(new Set(orgRows.map(r => String(r[weeklyReportData.dateCol]).trim()).filter(Boolean))).sort((a, b) => safeParseDate(a) - safeParseDate(b));
+                                      const targetDateIdx = orgDates.indexOf(selectedWeeklyEndDate);
+                                      
+                                      const prevVal = targetDateIdx > 0
+                                        ? Number((orgRows.find(r => String(r[weeklyReportData.dateCol]).trim() === orgDates[targetDateIdx - 1]) || {})[metric])
+                                        : null;
+                                      
+                                      const changePct = (prevVal !== null && prevVal > 0)
+                                        ? ((currentVal - prevVal) / prevVal) * 100
+                                        : null;
+
+                                      const badgeColor = changePct !== null
+                                        ? (changePct >= 0 ? 'text-emerald-500 bg-emerald-500/10' : 'text-red-500 bg-red-500/10')
+                                        : 'text-slate-400 bg-slate-500/10';
+
+                                      return (
+                                        <div key={org} className="flex items-center justify-between py-1.5 border-t border-slate-500/10 first:border-t-0">
+                                          <span className={`text-xs font-semibold truncate max-w-[180px] ${textPrimary}`}>{org}</span>
+                                          <div className="flex items-center gap-3">
+                                            <span className={`text-sm font-extrabold ${dark ? 'text-slate-200' : 'text-slate-700'}`}>{currentVal.toLocaleString()}</span>
+                                            {changePct !== null ? (
+                                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${badgeColor}`}>
+                                                {changePct >= 0 ? '↑' : '↓'} {Math.abs(changePct).toFixed(1)}%
+                                              </span>
+                                            ) : (
+                                              <span className="text-[9px] text-slate-400">baseline</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Historical Trend Line Graph (Comparison) */}
+                          <div className={`rounded-2xl border p-5 mb-6 ${dark ? 'bg-slate-800/40 border-slate-700/50' : 'bg-white border-slate-200 shadow-sm'}`}>
+                            <div className="flex items-center justify-between mb-4">
+                              <div>
+                                <h3 className={`text-sm font-bold ${textPrimary}`}>Historical Trend Progression</h3>
+                                <p className={`text-xs ${textMuted}`}>
+                                  {weeklyReportData.totalWeeks}-week range · comparing {weeklyReportData.selectedOrgs.length} organizations
+                                </p>
+                              </div>
+                              <span className={`text-[10px] font-bold px-2.5 py-1 rounded-lg ${dark ? 'bg-violet-900/40 text-violet-300 border border-violet-700/30' : 'bg-violet-50 text-violet-600 border border-violet-100'}`}>
+                                W1 → W{weeklyReportData.totalWeeks}
+                              </span>
+                            </div>
+                            <div style={{ width: '100%', height: 350 }}>
+                              <ResponsiveContainer>
+                                <ComposedChart data={weeklyReportData.historyRows}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke={dark ? '#334155' : '#e2e8f0'} vertical={false} />
+                                  <XAxis 
+                                    dataKey="__weekLabel" 
+                                    stroke={dark ? '#64748b' : '#94a3b8'} 
+                                    fontSize={10} 
+                                    tickLine={false} 
+                                    axisLine={false}
+                                  />
+                                  <YAxis 
+                                    stroke={dark ? '#64748b' : '#94a3b8'} 
+                                    fontSize={10} 
+                                    tickLine={false} 
+                                    axisLine={false}
+                                    tickFormatter={(val) => val.toLocaleString()}
+                                  />
+                                  <Tooltip 
+                                    content={({ active, payload, label }) => {
+                                      if (!active || !payload?.length) return null;
+                                      const row = weeklyReportData.historyRows.find(r => r.__weekLabel === label);
+                                      const dateStr = row ? row[weeklyReportData.dateCol] : label;
+                                      const d = new Date(dateStr);
+                                      const formattedDate = isNaN(d) ? dateStr : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                                      return (
+                                        <div className={`rounded-lg px-4 py-3 shadow-xl border text-sm max-w-xs ${dark ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-700'}`}>
+                                          <p className="font-semibold mb-1">{label} — <span className="font-mono text-xs opacity-70">{formattedDate}</span></p>
+                                          {payload.map((p, i) => (
+                                            <p key={i} className="flex items-center gap-2 text-xs">
+                                              <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: p.color }} />
+                                              <span className="opacity-70">{p.name}:</span>
+                                              <span className="font-semibold">{typeof p.value === 'number' ? p.value.toLocaleString() : p.value}</span>
+                                            </p>
+                                          ))}
+                                        </div>
+                                      );
+                                    }}
+                                  />
+                                  <Legend iconType="circle" wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                                  
+                                  <ReferenceLine 
+                                    x={`W${weeklyReportData.totalWeeks}`}
+                                    stroke={dark ? '#a855f7' : '#8b5cf6'} 
+                                    strokeWidth={2}
+                                    strokeDasharray="4 4"
+                                    label={{ value: 'End Week', fill: dark ? '#c084fc' : '#6b21a8', fontSize: 10, position: 'top' }} 
+                                  />
+                                  
+                                  {chartSeries.map(s => {
+                                    const labelConfig = {
+                                      position: 'top',
+                                      formatter: formatAxisTick,
+                                      fill: dark ? '#cbd5e1' : '#475569',
+                                      fontSize: 9,
+                                      fontWeight: 600
+                                    };
+                                    if (weeklyChartType === 'bar') {
+                                      return (
+                                        <Bar 
+                                          key={s.key} 
+                                          dataKey={s.key} 
+                                          name={s.label} 
+                                          fill={s.colorHex} 
+                                          radius={[4, 4, 0, 0]}
+                                          label={labelConfig}
+                                        />
+                                      );
+                                    } else if (weeklyChartType === 'area') {
+                                      return (
+                                        <Area 
+                                          key={s.key} 
+                                          type="monotone"
+                                          dataKey={s.key} 
+                                          name={s.label} 
+                                          stroke={s.colorHex} 
+                                          fill={s.colorHex} 
+                                          fillOpacity={0.15}
+                                          strokeWidth={2}
+                                          label={labelConfig}
+                                        />
+                                      );
+                                    } else {
+                                      return (
+                                        <Line 
+                                          key={s.key} 
+                                          type="monotone" 
+                                          dataKey={s.key} 
+                                          name={s.label} 
+                                          stroke={s.colorHex} 
+                                          strokeWidth={3} 
+                                          dot={{ r: 4, strokeWidth: 1 }}
+                                          activeDot={{ r: 7, strokeWidth: 0 }}
+                                          label={labelConfig}
+                                        />
+                                      );
+                                    }
+                                  })}
+                                </ComposedChart>
+                              </ResponsiveContainer>
+                            </div>
+                          </div>
+
+                          {/* Rolling Details Panel (Comparison) */}
+                          <div className="mb-6">
+                            <h3 className={`text-sm font-bold mb-3.5 ${textPrimary}`}>Organization Rolling Performance Profiles</h3>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              {weeklyReportData.orgWindowSummaries.map(summary => {
+                                const org = summary.org;
+                                const firstRow = summary.windowRows[0] || {};
+                                const regionKey = Object.keys(firstRow).find(k => k.toLowerCase().includes('region')) || 'Region';
+                                const cohortKey = Object.keys(firstRow).find(k => k.toLowerCase().includes('cohort')) || 'Cohort';
+                                const region = firstRow[regionKey] || '—';
+                                const cohort = firstRow[cohortKey] || '—';
+
+                                return (
+                                  <div 
+                                    key={org} 
+                                    className={`rounded-xl border p-4 transition-all ${
+                                      dark ? 'bg-slate-800/40 border-slate-700/50 hover:bg-slate-800/60' : 'bg-white border-slate-200 hover:shadow-sm'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between mb-2">
+                                      <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${dark ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                                        {org}
+                                      </span>
+                                      <span className={`text-[10px] font-mono-data ${textMuted}`}>
+                                        Region: {region}
+                                      </span>
+                                    </div>
+                                    <p className={`text-[9px] ${textMuted} mb-3`}>Cohort: {cohort}</p>
+                                    
+                                    <div className="space-y-2 mt-3">
+                                      {selectedWeeklyMetrics.map(metric => {
+                                        const val = Number(summary.latestRow[metric]) || 0;
+                                        const vals = summary.windowRows.map(r => Number(r[metric]) || 0);
+                                        const sum = vals.reduce((a, b) => a + b, 0);
+                                        const avg = vals.length > 0 ? sum / vals.length : 0;
+                                        
+                                        return (
+                                          <div key={metric} className="text-xs border-t border-slate-500/10 pt-2 first:border-t-0 first:pt-0">
+                                            <div className="flex justify-between items-center">
+                                              <span className={textMuted}>{metric}</span>
+                                              <span className={`font-semibold ${textPrimary}`}>
+                                                {val.toLocaleString()}
+                                              </span>
+                                            </div>
+                                            <div className="flex justify-between items-center text-[10px] text-slate-500/80">
+                                              <span>Rolling Avg ({weeklyReportData.windowSize}W)</span>
+                                              <span>{avg.toFixed(1)}</span>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()
+                  ) : (
+                    /* ═══════════════════════════════════════════
+                       SINGLE ORGANISATIONAL MODE DASHBOARD CANVAS
+                       ═══════════════════════════════════════════ */
+                    <>
+                      {/* Metadata banner */}
+                      {(() => {
+                        const firstRow = weeklyReportData.historyRows[0] || {};
+                        const regionKey = Object.keys(firstRow).find(k => k.toLowerCase().includes('region')) || 'Focus Region';
+                        const cohortKey = Object.keys(firstRow).find(k => k.toLowerCase().includes('cohort')) || 'India Cohort';
+                        const region = firstRow[regionKey] || '—';
+                        const cohort = firstRow[cohortKey] || '—';
+                        
+                        return (
+                          <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b pb-5" style={{ borderColor: dark ? '#334155' : '#e2e8f0' }}>
+                            <div>
+                              <h2 className={`text-2xl font-extrabold tracking-tight ${textPrimary}`}>{selectedOrg[0] || 'Select Organization'}</h2>
+                              <p className={`text-xs mt-1 ${textSecondary}`}>
+                                Range: <span className="font-semibold text-violet-500">{selectedWeeklyStartDate}</span> to <span className="font-semibold text-violet-500">{selectedWeeklyEndDate}</span>
+                              </p>
+                            </div>
+                            <div className="flex gap-2">
+                              <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg ${dark ? 'bg-slate-800 text-slate-400 border border-slate-700/50' : 'bg-slate-100 text-slate-600 border border-slate-200'}`}>
+                                Region: {region}
+                              </span>
+                              <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg ${dark ? 'bg-violet-950/40 text-violet-400 border border-violet-800/30' : 'bg-violet-50 text-violet-600 border border-violet-100'}`}>
+                                Cohort: {cohort}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Top Stats Cards Grid */}
+                      {(() => {
                         const colors = [
                           { text: 'text-blue-500', hex: '#3b82f6' },
                           { text: 'text-violet-500', hex: '#8b5cf6' },
@@ -3318,7 +4300,7 @@ export default function App() {
                           { text: 'text-pink-500', hex: '#ec4899' },
                           { text: 'text-indigo-500', hex: '#6366f1' },
                         ];
-                        const activeMetrics = selectedWeeklyMetrics.map((colName, idx) => {
+                        const metricsList = selectedWeeklyMetrics.map((colName, idx) => {
                           const color = colors[idx % colors.length];
                           return {
                             key: colName,
@@ -3329,119 +4311,334 @@ export default function App() {
                         });
 
                         return (
-                          <div 
-                            key={week.label} 
-                            className={`rounded-xl border p-4 transition-all ${
-                              isSelectedWeek 
-                                ? 'bg-violet-600/5 border-violet-500 ring-1 ring-violet-500/20 shadow-md shadow-violet-500/5' 
-                                : (dark ? 'bg-slate-800/40 border-slate-700/50 hover:bg-slate-800/60' : 'bg-white border-slate-200 hover:shadow-sm')
-                            }`}
-                          >
-                            <div className="flex items-center justify-between mb-2">
-                              <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
-                                isSelectedWeek 
-                                  ? 'bg-violet-500 text-white' 
-                                  : (dark ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-600')
-                              }`}>
-                                {week.label} {isSelectedWeek && ' (Target)'}
-                              </span>
-                              <span className={`text-[10px] font-mono-data ${textMuted}`}>
-                                {new Date(week.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                              </span>
-                            </div>
-                            
-                            <div className="space-y-1.5 mt-3">
-                              {activeMetrics.map(m => {
-                                const colName = m.key;
-                                const val = week.rawRow[colName] != null ? Number(week.rawRow[colName]) : null;
-                                const color = `${m.colorClass} font-semibold`;
-                                
-                                return (
-                                  <div key={m.key} className="flex justify-between items-center text-xs">
-                                    <span className={textMuted}>{m.label.replace('Current ', '')}</span>
-                                    <span className={color}>
-                                      {val !== null ? val.toLocaleString() : '—'}
-                                    </span>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                            {metricsList.map(m => {
+                              const colName = m.key;
+                              const currentVal = Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx][colName]) || 0;
+                              const prevVal = weeklyReportData.selectedIdx > 0 
+                                ? (Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx - 1][colName]) || 0) 
+                                : null;
+                              const changePct = (prevVal !== null && prevVal > 0)
+                                ? ((currentVal - prevVal) / prevVal) * 100
+                                : null;
+
+                              return (
+                                <div key={m.key} className={`rounded-xl border p-4 ${dark ? 'bg-slate-800/40 border-slate-700/50' : 'bg-white border-slate-200 shadow-sm'}`}>
+                                  <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${textMuted}`}>{m.label}</p>
+                                  <p className={`text-2xl font-extrabold ${m.colorClass}`}>{currentVal.toLocaleString()}</p>
+                                  <div className="flex items-center gap-1.5 mt-1.5">
+                                    {changePct !== null ? (
+                                      <>
+                                        <span className={`text-xs font-bold ${changePct >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                                          {changePct >= 0 ? '↑' : '↓'} {Math.abs(changePct).toFixed(1)}%
+                                        </span>
+                                        <span className={`text-[10px] ${textMuted}`}>vs last week</span>
+                                      </>
+                                    ) : (
+                                      <span className={`text-[10px] ${textMuted}`}>No prior data</span>
+                                    )}
                                   </div>
-                                );
-                              })}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
+
+                        {/* Historical Trend Line Graph */}
+                        {(() => {
+                          const colors = [
+                            { text: 'text-blue-500', hex: '#3b82f6' },
+                            { text: 'text-violet-500', hex: '#8b5cf6' },
+                            { text: 'text-emerald-500', hex: '#10b981' },
+                            { text: 'text-amber-500', hex: '#f59e0b' },
+                            { text: 'text-rose-500', hex: '#f43f5e' },
+                            { text: 'text-cyan-500', hex: '#06b6d4' },
+                            { text: 'text-pink-500', hex: '#ec4899' },
+                            { text: 'text-indigo-500', hex: '#6366f1' },
+                          ];
+                          const activeMetrics = selectedWeeklyMetrics.map((colName, idx) => {
+                            const color = colors[idx % colors.length];
+                            return {
+                              key: colName,
+                              label: colName,
+                              colorClass: color.text,
+                              colorHex: color.hex
+                            };
+                          });
+
+                          return (
+                            <div className={`rounded-2xl border p-5 mb-6 ${dark ? 'bg-slate-800/40 border-slate-700/50' : 'bg-white border-slate-200 shadow-sm'}`}>
+                              <div className="flex items-center justify-between mb-4">
+                                <div>
+                                  <h3 className={`text-sm font-bold ${textPrimary}`}>Historical Trend Progression</h3>
+                                  <p className={`text-xs ${textMuted}`}>
+                                    {weeklyReportData.totalWeeks}-week range selected · {selectedWeeklyMetrics.length} metric{selectedWeeklyMetrics.length !== 1 ? 's' : ''}
+                                  </p>
+                                </div>
+                                <span className={`text-[10px] font-bold px-2.5 py-1 rounded-lg ${dark ? 'bg-violet-900/40 text-violet-300 border border-violet-700/30' : 'bg-violet-50 text-violet-600 border border-violet-100'}`}>
+                                  W1 → W{weeklyReportData.totalWeeks}
+                                </span>
+                              </div>
+                              <div style={{ width: '100%', height: 350 }}>
+                                <ResponsiveContainer>
+                                  <ComposedChart data={weeklyReportData.historyRows}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke={dark ? '#334155' : '#e2e8f0'} vertical={false} />
+                                    <XAxis 
+                                      dataKey="__weekLabel" 
+                                      stroke={dark ? '#64748b' : '#94a3b8'} 
+                                      fontSize={10} 
+                                      tickLine={false} 
+                                      axisLine={false}
+                                    />
+                                    <YAxis 
+                                      stroke={dark ? '#64748b' : '#94a3b8'} 
+                                      fontSize={10} 
+                                      tickLine={false} 
+                                      axisLine={false}
+                                      tickFormatter={(val) => val.toLocaleString()}
+                                    />
+                                    <Tooltip 
+                                      content={({ active, payload, label }) => {
+                                        if (!active || !payload?.length) return null;
+                                        const row = weeklyReportData.historyRows.find(r => r.__weekLabel === label);
+                                        const dateStr = row ? row[weeklyReportData.dateCol] : label;
+                                        const d = new Date(dateStr);
+                                        const formattedDate = isNaN(d) ? dateStr : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                                        return (
+                                          <div className={`rounded-lg px-4 py-3 shadow-xl border text-sm max-w-xs ${dark ? 'bg-slate-800 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-700'}`}>
+                                            <p className="font-semibold mb-1">{label} — <span className="font-mono text-xs opacity-70">{formattedDate}</span></p>
+                                            {payload.filter(p => !p.dataKey?.startsWith('__')).map((p, i) => (
+                                              <p key={i} className="flex items-center gap-2 text-xs">
+                                                <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: p.color }} />
+                                                <span className="opacity-70">{p.name}:</span>
+                                                <span className="font-semibold">{typeof p.value === 'number' ? p.value.toLocaleString() : p.value}</span>
+                                              </p>
+                                            ))}
+                                          </div>
+                                        );
+                                      }}
+                                    />
+                                    <Legend iconType="circle" wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
+                                    
+                                    <ReferenceLine 
+                                      x={`W${weeklyReportData.totalWeeks}`}
+                                      stroke={dark ? '#a855f7' : '#8b5cf6'} 
+                                      strokeWidth={2}
+                                      strokeDasharray="4 4"
+                                      label={{ value: 'End Week', fill: dark ? '#c084fc' : '#6b21a8', fontSize: 10, position: 'top' }} 
+                                    />
+                                  
+                                  {activeMetrics.map(m => {
+                                    const colName = m.key;
+                                    const color = m.colorHex;
+                                    const labelConfig = {
+                                      position: 'top',
+                                      formatter: formatAxisTick,
+                                      fill: dark ? '#cbd5e1' : '#475569',
+                                      fontSize: 9,
+                                      fontWeight: 600
+                                    };
+                                    if (weeklyChartType === 'bar') {
+                                      return (
+                                        <Bar 
+                                          key={m.key} 
+                                          dataKey={colName} 
+                                          name={m.label} 
+                                          fill={color} 
+                                          radius={[4, 4, 0, 0]}
+                                          label={labelConfig}
+                                        />
+                                      );
+                                    } else if (weeklyChartType === 'area') {
+                                      return (
+                                        <Area 
+                                          key={m.key} 
+                                          type="monotone"
+                                          dataKey={colName} 
+                                          name={m.label} 
+                                          stroke={color} 
+                                          fill={color} 
+                                          fillOpacity={0.15}
+                                          strokeWidth={2}
+                                          label={labelConfig}
+                                        />
+                                      );
+                                    } else {
+                                      return (
+                                        <Line 
+                                          key={m.key} 
+                                          type="monotone" 
+                                          dataKey={colName} 
+                                          name={m.label} 
+                                          stroke={color} 
+                                          strokeWidth={3} 
+                                          dot={{ r: 4, strokeWidth: 1 }}
+                                          activeDot={{ r: 7, strokeWidth: 0 }}
+                                          label={labelConfig}
+                                        />
+                                      );
+                                    }
+                                  })}
+                                </ComposedChart>
+                              </ResponsiveContainer>
                             </div>
                           </div>
                         );
-                      })}
-                    </div>
-                  </div>
+                      })()}
 
-                  {/* Transition Card (Visual Added/Dropped Animation/Explainer) */}
-                  <div className={`rounded-xl border p-5 ${dark ? 'bg-slate-800/30 border-slate-700/50' : 'bg-slate-100/50 border-slate-200'}`}>
-                    <h3 className={`text-sm font-bold mb-3.5 ${textPrimary}`}>Rolling Window Progression ({weeklyReportData.windowSize}-Week Shift)</h3>
-                    <div className="flex flex-col lg:flex-row items-center justify-between gap-6">
-                      <div className="flex-1 min-w-[280px]">
-                        <p className={`text-sm leading-relaxed ${dark ? 'text-slate-300' : 'text-slate-600'}`}>
-                          Active users are computed over a rolling {weeklyReportData.windowSize}-week duration. 
-                          When progressing to week <span className="font-semibold text-violet-500 font-mono">{selectedWeeklyEndDate}</span>:
-                        </p>
-                        <ul className={`list-disc pl-5 mt-2 space-y-1 text-xs ${textSecondary}`}>
-                          {weeklyReportData.droppedWeekDate ? (
-                            <li>
-                              The oldest week <span className="text-red-500 font-semibold font-mono">{weeklyReportData.droppedWeekDate}</span> is <span className="text-red-500 font-semibold">dropped</span> from the rolling set.
-                            </li>
-                          ) : (
-                            <li>Initial weeks: no week dropped yet as database window is building up.</li>
-                          )}
-                          <li>
-                            The new week <span className="text-emerald-500 font-semibold font-mono">{selectedWeeklyEndDate}</span> is <span className="text-emerald-500 font-semibold">added</span>.
-                          </li>
-                        </ul>
-                      </div>
-
-                      <div className="flex items-center gap-3 md:gap-4 flex-shrink-0">
-                        {weeklyReportData.droppedWeekDate ? (
-                          <div className={`w-36 rounded-xl border p-3.5 text-center ${dark ? 'bg-red-500/5 border-red-500/20' : 'bg-red-50/50 border-red-100'}`}>
-                            <span className="text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-500/10 text-red-500">
-                              Dropped
-                            </span>
-                            <p className={`text-xs font-mono font-bold mt-2 ${textPrimary}`}>{weeklyReportData.droppedWeekDate}</p>
-                            {(() => {
-                              const firstMetricCol = selectedWeeklyMetrics[0];
-                              const val = firstMetricCol ? (Number(weeklyReportData.droppedWeekRow?.[firstMetricCol]) || 0) : 0;
-                              return (
-                                <p className="text-sm font-extrabold text-red-500/80 mt-1">
-                                  -{val.toLocaleString()}
-                                </p>
-                              );
-                            })()}
-                          </div>
-                        ) : (
-                          <div className={`w-36 rounded-xl border p-3.5 text-center border-dashed ${dark ? 'border-slate-700 bg-slate-800/10 text-slate-600' : 'border-slate-200 bg-slate-50 text-slate-400'}`}>
-                            <span className="text-[9px] font-bold">No Drop</span>
-                            <p className="text-xs mt-2 font-mono">—</p>
-                          </div>
-                        )}
-
-                        <div className="flex flex-col items-center">
-                          <span className="text-xl md:text-2xl text-violet-500">➔</span>
-                          <span className={`text-[8px] font-semibold tracking-wide uppercase ${textMuted}`}>Shift</span>
-                        </div>
-
-                        <div className={`w-36 rounded-xl border p-3.5 text-center ${dark ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-emerald-50/50 border-emerald-100'}`}>
-                          <span className="text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500">
-                            Added
+                      {/* Rolling Details Panel */}
+                      <div className="mb-6">
+                        <div className="flex items-center justify-between mb-3.5">
+                          <h3 className={`text-sm font-bold ${textPrimary}`}>Active Window — {weeklyReportData.totalWeeks} Week{weeklyReportData.totalWeeks !== 1 ? 's' : ''}</h3>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${dark ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                            {weeklyHistoryLimit === 'mau' ? 'MAU Window' : weeklyHistoryLimit === 'quarter' ? 'Quarter Window' : 'Custom Range'}
                           </span>
-                          <p className={`text-xs font-mono font-bold mt-2 ${textPrimary}`}>{selectedWeeklyEndDate}</p>
-                          {(() => {
-                            const firstMetricCol = selectedWeeklyMetrics[0];
-                            const val = firstMetricCol ? (Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx]?.[firstMetricCol]) || 0) : 0;
+                        </div>
+                        <div className={`grid gap-4 ${
+                          weeklyReportData.totalWeeks <= 4 ? 'grid-cols-1 sm:grid-cols-2 md:grid-cols-4' :
+                          weeklyReportData.totalWeeks <= 8 ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4' :
+                          weeklyReportData.totalWeeks <= 12 ? 'grid-cols-2 sm:grid-cols-4 md:grid-cols-6' :
+                          'grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8'
+                        }`}>
+                          {weeklyReportData.activeWindow.map((week) => {
+                            const isSelectedWeek = week.date === selectedWeeklyEndDate;
+                            const colors = [
+                              { text: 'text-blue-500', hex: '#3b82f6' },
+                              { text: 'text-violet-500', hex: '#8b5cf6' },
+                              { text: 'text-emerald-500', hex: '#10b981' },
+                              { text: 'text-amber-500', hex: '#f59e0b' },
+                              { text: 'text-rose-500', hex: '#f43f5e' },
+                              { text: 'text-cyan-500', hex: '#06b6d4' },
+                              { text: 'text-pink-500', hex: '#ec4899' },
+                              { text: 'text-indigo-500', hex: '#6366f1' },
+                            ];
+                            const activeMetrics = selectedWeeklyMetrics.map((colName, idx) => {
+                              const color = colors[idx % colors.length];
+                              return {
+                                key: colName,
+                                label: colName,
+                                colorClass: color.text,
+                                colorHex: color.hex
+                              };
+                            });
+
                             return (
-                              <p className="text-sm font-extrabold text-emerald-500/80 mt-1">
-                                +{val.toLocaleString()}
-                              </p>
+                              <div 
+                                key={week.label} 
+                                className={`rounded-xl border p-4 transition-all ${
+                                  isSelectedWeek 
+                                    ? 'bg-violet-600/5 border-violet-500 ring-1 ring-violet-500/20 shadow-md shadow-violet-500/5' 
+                                    : (dark ? 'bg-slate-800/40 border-slate-700/50 hover:bg-slate-800/60' : 'bg-white border-slate-200 hover:shadow-sm')
+                                }`}
+                              >
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                                    isSelectedWeek 
+                                      ? 'bg-violet-500 text-white' 
+                                      : (dark ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-600')
+                                  }`}>
+                                    {week.label} {isSelectedWeek && ' (Target)'}
+                                  </span>
+                                  <span className={`text-[10px] font-mono-data ${textMuted}`}>
+                                    {new Date(week.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                  </span>
+                                </div>
+                                
+                                <div className="space-y-1.5 mt-3">
+                                  {activeMetrics.map(m => {
+                                    const colName = m.key;
+                                    const val = week.rawRow[colName] != null ? Number(week.rawRow[colName]) : null;
+                                    const color = `${m.colorClass} font-semibold`;
+                                    
+                                    return (
+                                      <div key={m.key} className="flex justify-between items-center text-xs">
+                                        <span className={textMuted}>{m.label.replace('Current ', '')}</span>
+                                        <span className={color}>
+                                          {val !== null ? val.toLocaleString() : '—'}
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
                             );
-                          })()}
+                          })}
                         </div>
                       </div>
-                    </div>
-                  </div>
+
+                      {/* Transition Card */}
+                      <div className={`rounded-xl border p-5 ${dark ? 'bg-slate-800/30 border-slate-700/50' : 'bg-slate-100/50 border-slate-200'}`}>
+                        <h3 className={`text-sm font-bold mb-3.5 ${textPrimary}`}>Rolling Window Progression ({weeklyReportData.totalWeeks}-Week Range)</h3>
+                        <div className="flex flex-col lg:flex-row items-center justify-between gap-6">
+                          <div className="flex-1 min-w-[280px]">
+                            <p className={`text-sm leading-relaxed ${dark ? 'text-slate-300' : 'text-slate-600'}`}>
+                              Active users are computed over a rolling {weeklyReportData.totalWeeks}-week duration ({weeklyHistoryLimit === 'mau' ? 'MAU' : weeklyHistoryLimit === 'quarter' ? 'Quarter' : 'Custom'} window). 
+                              End week is <span className="font-semibold text-violet-500 font-mono">{selectedWeeklyEndDate}</span>:
+                            </p>
+                            <ul className={`list-disc pl-5 mt-2 space-y-1 text-xs ${textSecondary}`}>
+                              {weeklyReportData.droppedWeekDate ? (
+                                <li>
+                                  The oldest week <span className="text-red-500 font-semibold font-mono">{weeklyReportData.droppedWeekDate}</span> is <span className="text-red-500 font-semibold">dropped</span> from the rolling set.
+                                </li>
+                              ) : (
+                                <li>Initial weeks: no week dropped yet as the window is building up.</li>
+                              )}
+                              <li>
+                                The selected end week <span className="text-emerald-500 font-semibold font-mono">{selectedWeeklyEndDate}</span> (<span className="text-emerald-500 font-semibold">W{weeklyReportData.totalWeeks}</span>) marks the final data point.
+                              </li>
+                            </ul>
+                          </div>
+
+                          <div className="flex items-center gap-3 md:gap-4 flex-shrink-0">
+                            {weeklyReportData.droppedWeekDate ? (
+                              <div className={`w-36 rounded-xl border p-3.5 text-center ${dark ? 'bg-red-500/5 border-red-500/20' : 'bg-red-50/50 border-red-100'}`}>
+                                <span className="text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-500/10 text-red-500">
+                                  Dropped
+                                </span>
+                                <p className={`text-xs font-mono font-bold mt-2 ${textPrimary}`}>{weeklyReportData.droppedWeekDate}</p>
+                                {(() => {
+                                  const firstMetricCol = selectedWeeklyMetrics[0];
+                                  const val = firstMetricCol ? (Number(weeklyReportData.droppedWeekRow?.[firstMetricCol]) || 0) : 0;
+                                  return (
+                                    <p className="text-sm font-extrabold text-red-500/80 mt-1">
+                                      -{val.toLocaleString()}
+                                    </p>
+                                  );
+                                })()}
+                              </div>
+                            ) : (
+                              <div className={`w-36 rounded-xl border p-3.5 text-center border-dashed ${dark ? 'border-slate-700 bg-slate-800/10 text-slate-600' : 'border-slate-200 bg-slate-50 text-slate-400'}`}>
+                                <span className="text-[9px] font-bold">No Drop</span>
+                                <p className="text-xs mt-2 font-mono">—</p>
+                              </div>
+                            )}
+
+                            <div className="flex flex-col items-center">
+                              <span className="text-xl md:text-2xl text-violet-500">➔</span>
+                              <span className={`text-[8px] font-semibold tracking-wide uppercase ${textMuted}`}>Shift</span>
+                            </div>
+
+                            <div className={`w-36 rounded-xl border p-3.5 text-center ${dark ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-emerald-50/50 border-emerald-100'}`}>
+                              <span className="text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500">
+                                Added
+                              </span>
+                              <p className={`text-xs font-mono font-bold mt-2 ${textPrimary}`}>{selectedWeeklyEndDate}</p>
+                              {(() => {
+                                const firstMetricCol = selectedWeeklyMetrics[0];
+                                const val = firstMetricCol ? (Number(weeklyReportData.orgRows[weeklyReportData.selectedIdx]?.[firstMetricCol]) || 0) : 0;
+                                return (
+                                  <p className="text-sm font-extrabold text-emerald-500/80 mt-1">
+                                    +{val.toLocaleString()}
+                                  </p>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               )
             )}
