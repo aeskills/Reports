@@ -76,11 +76,18 @@ function detectFieldType(colName, data) {
   if (dateCount > sample.length * 0.7) return 'date';
 
   // Check if numeric
-  const numCount = sample.filter(v => !isNaN(Number(v))).length;
+  const numCount = sample.filter(v => {
+    const cleanStr = String(v).replace(/[\s,$%]/g, '');
+    return cleanStr !== '' && !isNaN(Number(cleanStr));
+  }).length;
   if (numCount > sample.length * 0.7) {
     // Check if it looks like a percentage or ratio
     const hasPercent = colName.match(/%|percent|ratio|penetration/i);
-    const maxVal = Math.max(...sample.map(Number).filter(n => !isNaN(n)));
+    const numericSample = sample.map(v => {
+      const cleanStr = String(v).replace(/[\s,$%]/g, '');
+      return Number(cleanStr);
+    }).filter(n => !isNaN(n));
+    const maxVal = numericSample.length ? Math.max(...numericSample) : 0;
     if (hasPercent || (maxVal <= 100 && maxVal > 0 && colName.match(/rate|pct|change/i))) return 'ratio';
     return 'numeric';
   }
@@ -242,6 +249,16 @@ CUSTOM_CHART_BUILDER_END */
 /* ═══════════════════════════════════════════
    HELPERS
    ═══════════════════════════════════════════ */
+
+function cleanVal(val) {
+  if (val == null || val === '') return 0;
+  if (typeof val === 'number') {
+    return Number.isFinite(val) ? val : 0;
+  }
+  const clean = String(val).replace(/[\s,$%]/g, '');
+  const parsed = Number(clean);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 function formatAxisTick(value) {
   if (typeof value !== 'number') return value;
@@ -2420,7 +2437,13 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
               {/* Screen-only Responsive Chart */}
               <div className="print:hidden weekly-report-chart-container" style={{ width: '100%', height: 320 }}>
                 <ResponsiveContainer>
-                  <ComposedChart data={weeklyReportData.historyRows}>
+                  <ComposedChart 
+                    key={weeklyReportData.isComparison 
+                      ? `modal-resp-comp-${orgName.join('-')}-${selectedWeeklyMetrics.join('-')}-${weeklyChartType}` 
+                      : `modal-resp-single-${orgName[0]}-${selectedWeeklyMetrics.join('-')}-${weeklyChartType}`
+                    }
+                    data={weeklyReportData.historyRows}
+                  >
                     <CartesianGrid strokeDasharray="3 3" stroke={dark ? '#334155' : '#e2e8f0'} vertical={false} />
                   <XAxis 
                       dataKey="__weekLabel" 
@@ -2502,7 +2525,16 @@ const WeeklyReportModal = ({ orgName, targetDate, weeklyReportData, selectedWeek
 
               {/* Print-only Static Chart (Prevents Recharts print container collapse) */}
               <div className="hidden print:block weekly-report-chart-container-print" style={{ width: 680, height: 320 }}>
-                <ComposedChart width={680} height={320} data={weeklyReportData.historyRows} margin={{ top: 20, right: 30, bottom: 20, left: 10 }}>
+                <ComposedChart 
+                  key={weeklyReportData.isComparison 
+                    ? `modal-print-comp-${orgName.join('-')}-${selectedWeeklyMetrics.join('-')}-${weeklyChartType}` 
+                    : `modal-print-single-${orgName[0]}-${selectedWeeklyMetrics.join('-')}-${weeklyChartType}`
+                  }
+                  width={680} 
+                  height={320} 
+                  data={weeklyReportData.historyRows} 
+                  margin={{ top: 20, right: 30, bottom: 20, left: 10 }}
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
                   <XAxis 
                     dataKey="__weekLabel" 
@@ -3025,18 +3057,31 @@ export default function App() {
     }
     const cols = Object.keys(data[0]);
     const meta = getFieldMetadata(cols, data);
-    setCsvData(data);
+
+    // Clean numeric/ratio columns at ingestion time
+    const cleanedData = data.map(row => {
+      const cleanRow = { ...row };
+      cols.forEach(col => {
+        const type = meta[col];
+        if (type === 'numeric' || type === 'ratio') {
+          cleanRow[col] = cleanVal(row[col]);
+        }
+      });
+      return cleanRow;
+    });
+
+    setCsvData(cleanedData);
     setColumns(cols);
     setFieldMeta(meta);
     setFileName(name);
-    setRowCount(data.length);
-    setPreviewRows(data.slice(0, 3));
+    setRowCount(cleanedData.length);
+    setPreviewRows(cleanedData.slice(0, 3));
     setXAxis(cols[0] || '');
     setYAxis([]);
     setShowPreview(false);
     setViewMode('weekly');
     setLoading(false);
-    setToast({ message: `Loaded ${data.length} rows from ${name}`, type: 'success' });
+    setToast({ message: `Loaded ${cleanedData.length} rows from ${name}`, type: 'success' });
   }, []);
 
   const handleParseCSV = useCallback((text, name) => {
@@ -4094,7 +4139,10 @@ export default function App() {
                             </div>
                             <div style={{ width: '100%', height: 350 }}>
                               <ResponsiveContainer>
-                                <ComposedChart data={weeklyReportData.historyRows}>
+                                <ComposedChart 
+                                  key={`dashboard-comp-${selectedOrg.join('-')}-${selectedWeeklyMetrics.join('-')}-${weeklyChartType}`}
+                                  data={weeklyReportData.historyRows}
+                                >
                                   <CartesianGrid strokeDasharray="3 3" stroke={dark ? '#334155' : '#e2e8f0'} vertical={false} />
                                   <XAxis 
                                     dataKey="__weekLabel" 
@@ -4382,7 +4430,10 @@ export default function App() {
                               </div>
                               <div style={{ width: '100%', height: 350 }}>
                                 <ResponsiveContainer>
-                                  <ComposedChart data={weeklyReportData.historyRows}>
+                                  <ComposedChart 
+                                    key={`dashboard-single-${selectedOrg[0]}-${selectedWeeklyMetrics.join('-')}-${weeklyChartType}`}
+                                    data={weeklyReportData.historyRows}
+                                  >
                                     <CartesianGrid strokeDasharray="3 3" stroke={dark ? '#334155' : '#e2e8f0'} vertical={false} />
                                     <XAxis 
                                       dataKey="__weekLabel" 
