@@ -2751,7 +2751,7 @@ export default function App() {
   const [selectedWeeklyEndDate, setSelectedWeeklyEndDate] = useState('');
   const [selectedWeeklyMetrics, setSelectedWeeklyMetrics] = useState([]);
   const [weeklyHistoryLimit, setWeeklyHistoryLimit] = useState('mau'); // 'mau' or 'quarter'
-  const [weeklyChartType, setWeeklyChartType] = useState('line');
+  const [weeklyChartType, setWeeklyChartType] = useState('bar');
 
   // Chart config
   const [xAxis, setXAxis] = useState('');
@@ -2867,12 +2867,10 @@ export default function App() {
   }, [csvData, selectedCustomOrg]);
   CUSTOM_CHART_BUILDER_END */
 
-  // Auto-select first organization on file load
+  // Clear selected organization on file load
   useEffect(() => {
-    if (uniqueOrgs.length > 0 && (selectedOrg.length === 0 || !selectedOrg.every(o => uniqueOrgs.includes(o)))) {
-      setSelectedOrg([uniqueOrgs[0]]);
-    }
-  }, [uniqueOrgs, selectedOrg]);
+    setSelectedOrg([]);
+  }, [uniqueOrgs]);
 
   // Auto-select date range on organization load
   useEffect(() => {
